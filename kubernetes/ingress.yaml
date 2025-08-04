@@ -1,0 +1,367 @@
+# Aura AI Platform - Kubernetes Ingress Configuration
+# External access and SSL termination for the API Gateway
+
+# GKE Ingress Controller (Google Cloud Load Balancer)
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: aura-ai-ingress
+  namespace: aura-ai
+  labels:
+    app.kubernetes.io/name: aura-ai-platform
+    app.kubernetes.io/component: ingress
+    app.kubernetes.io/version: "1.0.0"
+  annotations:
+    # GKE specific annotations
+    kubernetes.io/ingress.class: "gce"
+    kubernetes.io/ingress.global-static-ip-name: "aura-ai-ip"
+    networking.gke.io/managed-certificates: "aura-ai-ssl-cert"
+    networking.gke.io/load-balancer-type: "External"
+    
+    # Security and performance annotations
+    cloud.google.com/armor-config: '{"aura-ai-security-policy": "aura-ai-security-policy"}'
+    cloud.google.com/backend-config: '{"default": "aura-ai-backend-config"}'
+    
+    # Rate limiting and timeouts
+    nginx.ingress.kubernetes.io/rate-limit: "100"
+    nginx.ingress.kubernetes.io/rate-limit-window: "1m"
+    nginx.ingress.kubernetes.io/proxy-connect-timeout: "30"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "120"
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "120"
+    nginx.ingress.kubernetes.io/proxy-body-size: "10m"
+    
+    # CORS configuration
+    nginx.ingress.kubernetes.io/enable-cors: "true"
+    nginx.ingress.kubernetes.io/cors-allow-origin: "https://aura-ai.com,https://app.aura-ai.com"
+    nginx.ingress.kubernetes.io/cors-allow-methods: "GET,POST,PUT,DELETE,OPTIONS"
+    nginx.ingress.kubernetes.io/cors-allow-headers: "DNT,X-CustomHeader,Keep-Alive,User-Agent,X-Requested-With,If-Modified-Since,Cache-Control,Content-Type,Authorization"
+    
+    # SSL and security headers
+    nginx.ingress.kubernetes.io/ssl-redirect: "true"
+    nginx.ingress.kubernetes.io/force-ssl-redirect: "true"
+    nginx.ingress.kubernetes.io/hsts: "true"
+    nginx.ingress.kubernetes.io/hsts-max-age: "31536000"
+    nginx.ingress.kubernetes.io/hsts-include-subdomains: "true"
+    
+    # Custom headers
+    nginx.ingress.kubernetes.io/configuration-snippet: |
+      add_header X-Frame-Options "SAMEORIGIN" always;
+      add_header X-Content-Type-Options "nosniff" always;
+      add_header X-XSS-Protection "1; mode=block" always;
+      add_header Referrer-Policy "no-referrer-when-downgrade" always;
+      add_header Content-Security-Policy "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:; font-src 'self' data:;" always;
+      
+spec:
+  tls:
+  - hosts:
+    - api.aura-ai.com
+    - aura-ai.com
+    secretName: aura-ai-tls
+  
+  rules:
+  # Main API domain
+  - host: api.aura-ai.com
+    http:
+      paths:
+      # Visual Analysis Service
+      - path: /api/v1/visual-analysis
+        pathType: Prefix
+        backend:
+          service:
+            name: nginx-gateway-service
+            port:
+              number: 80
+      
+      # Outfit Recommendation Service
+      - path: /api/v1/outfit-recommendation
+        pathType: Prefix
+        backend:
+          service:
+            name: nginx-gateway-service
+            port:
+              number: 80
+      
+      # Conversational AI Service
+      - path: /api/v1/conversational-ai
+        pathType: Prefix
+        backend:
+          service:
+            name: nginx-gateway-service
+            port:
+              number: 80
+      
+      # Triton Inference Server
+      - path: /api/v1/triton
+        pathType: Prefix
+        backend:
+          service:
+            name: nginx-gateway-service
+            port:
+              number: 80
+      
+      # Health check and status
+      - path: /health
+        pathType: Exact
+        backend:
+          service:
+            name: nginx-gateway-service
+            port:
+              number: 80
+      
+      # API documentation
+      - path: /docs
+        pathType: Prefix
+        backend:
+          service:
+            name: nginx-gateway-service
+            port:
+              number: 80
+      
+      # Default route
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: nginx-gateway-service
+            port:
+              number: 80
+
+  # Alternative domain (redirect to main)
+  - host: aura-ai.com
+    http:
+      paths:
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: nginx-gateway-service
+            port:
+              number: 80
+
+---
+# Google Managed SSL Certificate
+apiVersion: networking.gke.io/v1
+kind: ManagedCertificate
+metadata:
+  name: aura-ai-ssl-cert
+  namespace: aura-ai
+  labels:
+    app.kubernetes.io/name: aura-ai-platform
+    app.kubernetes.io/component: ssl-certificate
+spec:
+  domains:
+  - api.aura-ai.com
+  - aura-ai.com
+
+---
+# Backend Configuration for GKE Load Balancer
+apiVersion: cloud.google.com/v1
+kind: BackendConfig
+metadata:
+  name: aura-ai-backend-config
+  namespace: aura-ai
+  labels:
+    app.kubernetes.io/name: aura-ai-platform
+    app.kubernetes.io/component: backend-config
+spec:
+  # Health check configuration
+  healthCheck:
+    checkIntervalSec: 30
+    timeoutSec: 10
+    healthyThreshold: 1
+    unhealthyThreshold: 3
+    type: HTTP
+    requestPath: /health
+    port: 80
+  
+  # Session affinity
+  sessionAffinity:
+    affinityType: "CLIENT_IP"
+    affinityCookieTtlSec: 3600
+  
+  # Connection draining timeout
+  connectionDraining:
+    drainingTimeoutSec: 60
+  
+  # Custom request headers
+  customRequestHeaders:
+    headers:
+    - "X-Client-Region:{client_region}"
+    - "X-Client-City:{client_city}"
+    - "X-Forwarded-Proto:https"
+  
+  # Timeout settings
+  timeoutSec: 120
+  
+  # CDN configuration
+  cdn:
+    enabled: true
+    cachePolicy:
+      includeHost: true
+      includeProtocol: true
+      includeQueryString: false
+    negativeCaching: true
+    negativeCachingPolicy:
+    - code: 404
+      ttl: 300
+    - code: 500
+      ttl: 60
+
+---
+# Cloud Armor Security Policy
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: cloud-armor-policy
+  namespace: aura-ai
+  labels:
+    app.kubernetes.io/name: aura-ai-platform
+    app.kubernetes.io/component: security-policy
+data:
+  security-policy.yaml: |
+    # Google Cloud Armor Security Policy Configuration
+    # This should be applied via gcloud CLI or Terraform
+    
+    name: aura-ai-security-policy
+    description: "Security policy for Aura AI Platform"
+    
+    rules:
+    # Allow known good IPs (example)
+    - description: "Allow trusted IPs"
+      priority: 1000
+      match:
+        versionedExpr: SRC_IPS_V1
+        config:
+          srcIpRanges:
+          - "203.0.113.0/24"  # Replace with your trusted IP ranges
+      action: "allow"
+    
+    # Rate limiting rule
+    - description: "Rate limit requests"
+      priority: 2000
+      match:
+        versionedExpr: SRC_IPS_V1
+        config:
+          srcIpRanges:
+          - "*"
+      action: "rate_based_ban"
+      rateLimitOptions:
+        conformAction: "allow"
+        exceedAction: "deny-429"
+        enforceOnKey: "IP"
+        rateLimitThreshold:
+          count: 100
+          intervalSec: 60
+        banDurationSec: 600
+    
+    # Block common attack patterns
+    - description: "Block SQL injection attempts"
+      priority: 3000
+      match:
+        expr:
+          expression: "request.url_map =~ '(?i)(union|select|insert|delete|drop|update|exec|script)'"
+      action: "deny-403"
+    
+    # Block XSS attempts
+    - description: "Block XSS attempts"
+      priority: 3001
+      match:
+        expr:
+          expression: "request.url_map =~ '(?i)(<script|javascript:|onload=|onerror=)'"
+      action: "deny-403"
+    
+    # Default allow rule
+    - description: "Default allow"
+      priority: 2147483647
+      match:
+        versionedExpr: SRC_IPS_V1
+        config:
+          srcIpRanges:
+          - "*"
+      action: "allow"
+
+---
+# Network Endpoint Group for better load balancing
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: neg-config
+  namespace: aura-ai
+  labels:
+    app.kubernetes.io/name: aura-ai-platform
+    app.kubernetes.io/component: neg-config
+data:
+  neg-config.yaml: |
+    # Network Endpoint Group configuration
+    # Enables container-native load balancing for better performance
+    
+    annotations:
+      cloud.google.com/neg: '{"ingress": true}'
+      cloud.google.com/neg-status: '{"zones":["us-central1-a","us-central1-b","us-central1-c"]}'
+
+---
+# Alternative Nginx Ingress Controller (if preferred over GKE)
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: aura-ai-nginx-ingress
+  namespace: aura-ai
+  labels:
+    app.kubernetes.io/name: aura-ai-platform
+    app.kubernetes.io/component: nginx-ingress
+  annotations:
+    kubernetes.io/ingress.class: "nginx"
+    cert-manager.io/cluster-issuer: "letsencrypt-prod"
+    nginx.ingress.kubernetes.io/rewrite-target: /$2
+    nginx.ingress.kubernetes.io/use-regex: "true"
+    nginx.ingress.kubernetes.io/ssl-redirect: "true"
+    nginx.ingress.kubernetes.io/force-ssl-redirect: "true"
+    nginx.ingress.kubernetes.io/hsts: "true"
+    nginx.ingress.kubernetes.io/hsts-max-age: "31536000"
+    nginx.ingress.kubernetes.io/proxy-body-size: "10m"
+    nginx.ingress.kubernetes.io/rate-limit: "100"
+    nginx.ingress.kubernetes.io/rate-limit-window: "1m"
+spec:
+  tls:
+  - hosts:
+    - api.aura-ai.com
+    secretName: aura-ai-nginx-tls
+  rules:
+  - host: api.aura-ai.com
+    http:
+      paths:
+      - path: /api/v1/visual-analysis(/|$)(.*)
+        pathType: Prefix
+        backend:
+          service:
+            name: visual-analysis-service
+            port:
+              number: 8000
+      - path: /api/v1/outfit-recommendation(/|$)(.*)
+        pathType: Prefix
+        backend:
+          service:
+            name: outfit-recommendation-service
+            port:
+              number: 8001
+      - path: /api/v1/conversational-ai(/|$)(.*)
+        pathType: Prefix
+        backend:
+          service:
+            name: conversational-ai-service
+            port:
+              number: 8003
+      - path: /api/v1/triton(/|$)(.*)
+        pathType: Prefix
+        backend:
+          service:
+            name: triton-service
+            port:
+              number: 8000
+      - path: /(.*)
+        pathType: Prefix
+        backend:
+          service:
+            name: nginx-gateway-service
+            port:
+              number: 80

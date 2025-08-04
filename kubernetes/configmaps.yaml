@@ -1,0 +1,285 @@
+# Aura AI Platform - Kubernetes ConfigMaps
+# Contains non-sensitive configuration data for all services
+
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: aura-ai-config
+  namespace: aura-ai
+  labels:
+    app.kubernetes.io/name: aura-ai-platform
+    app.kubernetes.io/component: configmap
+    app.kubernetes.io/version: "1.0.0"
+data:
+  # Global Configuration
+  ENVIRONMENT: "production"
+  LOG_LEVEL: "INFO"
+  LOG_FORMAT: "json"
+  TIMEZONE: "UTC"
+  
+  # Model Configuration
+  MODEL_CACHE_DIR: "/app/models"
+  VECTOR_STORE_PATH: "/app/vector_store"
+  DEVICE: "cuda"
+  MAX_WORKERS: "4"
+  CACHE_TTL: "3600"
+  
+  # Database Configuration
+  POSTGRES_HOST: "postgres-service.aura-ai.svc.cluster.local"
+  POSTGRES_PORT: "5432"
+  POSTGRES_DB: "aura_platform"
+  
+  # Redis Configuration
+  REDIS_HOST: "redis-service.aura-ai.svc.cluster.local"
+  REDIS_PORT: "6379"
+  REDIS_DB: "0"
+  
+  # Service URLs
+  VISUAL_ANALYSIS_URL: "http://visual-analysis-service.aura-ai.svc.cluster.local:8000"
+  OUTFIT_RECOMMENDATION_URL: "http://outfit-recommendation-service.aura-ai.svc.cluster.local:8001"
+  CONVERSATIONAL_AI_URL: "http://conversational-ai-service.aura-ai.svc.cluster.local:8003"
+  TRITON_URL: "http://triton-service.aura-ai.svc.cluster.local:8000"
+  
+  # Monitoring Configuration
+  PROMETHEUS_URL: "http://prometheus-service.monitoring.svc.cluster.local:9090"
+  GRAFANA_URL: "http://grafana-service.monitoring.svc.cluster.local:3000"
+  
+  # Security Configuration
+  CORS_ORIGINS: "https://aura-ai.com,https://api.aura-ai.com,https://app.aura-ai.com"
+  ALLOWED_HOSTS: "aura-ai.com,api.aura-ai.com,app.aura-ai.com,localhost"
+  
+  # Performance Configuration
+  WORKER_CONNECTIONS: "1024"
+  KEEP_ALIVE_TIMEOUT: "65"
+  MAX_REQUEST_SIZE: "10485760"  # 10MB
+  
+  # AI Model Configuration
+  MODEL_BATCH_SIZE: "4"
+  MODEL_MAX_LENGTH: "2048"
+  MODEL_TEMPERATURE: "0.7"
+  MODEL_TOP_P: "0.9"
+  MODEL_TOP_K: "50"
+
+---
+# Nginx Configuration for API Gateway
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: nginx-config
+  namespace: aura-ai
+  labels:
+    app.kubernetes.io/name: aura-ai-platform
+    app.kubernetes.io/component: nginx-config
+data:
+  nginx.conf: |
+    user nginx;
+    worker_processes auto;
+    error_log /var/log/nginx/error.log notice;
+    pid /var/run/nginx.pid;
+
+    events {
+        worker_connections 1024;
+        use epoll;
+        multi_accept on;
+    }
+
+    http {
+        include /etc/nginx/mime.types;
+        default_type application/octet-stream;
+        
+        log_format main '$remote_addr - $remote_user [$time_local] "$request" '
+                        '$status $body_bytes_sent "$http_referer" '
+                        '"$http_user_agent" "$http_x_forwarded_for" '
+                        'upstream: $upstream_addr response_time: $upstream_response_time';
+                        
+        access_log /var/log/nginx/access.log main;
+        
+        sendfile on;
+        tcp_nopush on;
+        tcp_nodelay on;
+        keepalive_timeout 65;
+        client_max_body_size 10M;
+        
+        gzip on;
+        gzip_vary on;
+        gzip_min_length 1000;
+        gzip_types
+            application/atom+xml
+            application/geo+json
+            application/javascript
+            application/x-javascript
+            application/json
+            application/ld+json
+            application/manifest+json
+            application/rdf+xml
+            application/rss+xml
+            application/xhtml+xml
+            application/xml
+            font/eot
+            font/otf
+            font/ttf
+            image/svg+xml
+            text/css
+            text/javascript
+            text/plain
+            text/xml;
+
+        upstream visual_analysis_service {
+            server visual-analysis-service.aura-ai.svc.cluster.local:8000;
+            keepalive 32;
+        }
+        
+        upstream outfit_recommendation_service {
+            server outfit-recommendation-service.aura-ai.svc.cluster.local:8001;
+            keepalive 32;
+        }
+        
+        upstream conversational_ai_service {
+            server conversational-ai-service.aura-ai.svc.cluster.local:8003;
+            keepalive 32;
+        }
+
+        limit_req_zone $binary_remote_addr zone=api_limit:10m rate=100r/m;
+        limit_req_zone $binary_remote_addr zone=upload_limit:10m rate=10r/m;
+
+        server {
+            listen 80;
+            server_name _;
+            
+            add_header X-Frame-Options "SAMEORIGIN" always;
+            add_header X-Content-Type-Options "nosniff" always;
+            add_header X-XSS-Protection "1; mode=block" always;
+            add_header Referrer-Policy "no-referrer-when-downgrade" always;
+            
+            location / {
+                return 200 '{"service":"Aura AI Platform API Gateway","version":"1.0.0","status":"active"}';
+                add_header Content-Type application/json;
+            }
+            
+            location /health {
+                access_log off;
+                return 200 '{"status":"healthy","gateway":"nginx"}';
+                add_header Content-Type application/json;
+            }
+
+            location /api/v1/visual-analysis/ {
+                limit_req zone=api_limit burst=20 nodelay;
+                limit_req zone=upload_limit burst=5 nodelay;
+                
+                proxy_pass http://visual_analysis_service/;
+                proxy_http_version 1.1;
+                proxy_set_header Upgrade $http_upgrade;
+                proxy_set_header Connection 'upgrade';
+                proxy_set_header Host $host;
+                proxy_set_header X-Real-IP $remote_addr;
+                proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+                proxy_set_header X-Forwarded-Proto $scheme;
+                proxy_cache_bypass $http_upgrade;
+                
+                proxy_connect_timeout 30s;
+                proxy_send_timeout 300s;
+                proxy_read_timeout 300s;
+            }
+
+            location /api/v1/outfit-recommendation/ {
+                limit_req zone=api_limit burst=20 nodelay;
+                
+                proxy_pass http://outfit_recommendation_service/;
+                proxy_http_version 1.1;
+                proxy_set_header Upgrade $http_upgrade;
+                proxy_set_header Connection 'upgrade';
+                proxy_set_header Host $host;
+                proxy_set_header X-Real-IP $remote_addr;
+                proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+                proxy_set_header X-Forwarded-Proto $scheme;
+                proxy_cache_bypass $http_upgrade;
+                
+                proxy_connect_timeout 30s;
+                proxy_send_timeout 120s;
+                proxy_read_timeout 120s;
+            }
+
+            location /api/v1/conversational-ai/ {
+                limit_req zone=api_limit burst=20 nodelay;
+                
+                proxy_pass http://conversational_ai_service/;
+                proxy_http_version 1.1;
+                proxy_set_header Upgrade $http_upgrade;
+                proxy_set_header Connection 'upgrade';
+                proxy_set_header Host $host;
+                proxy_set_header X-Real-IP $remote_addr;
+                proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+                proxy_set_header X-Forwarded-Proto $scheme;
+                proxy_cache_bypass $http_upgrade;
+                
+                proxy_connect_timeout 30s;
+                proxy_send_timeout 120s;
+                proxy_read_timeout 120s;
+            }
+
+            location /api/v1/conversational-ai/ws/ {
+                proxy_pass http://conversational_ai_service/ws/;
+                proxy_http_version 1.1;
+                proxy_set_header Upgrade $http_upgrade;
+                proxy_set_header Connection "upgrade";
+                proxy_set_header Host $host;
+                proxy_set_header X-Real-IP $remote_addr;
+                proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+                proxy_set_header X-Forwarded-Proto $scheme;
+                
+                proxy_read_timeout 3600s;
+                proxy_send_timeout 3600s;
+            }
+        }
+    }
+
+---
+# Prometheus Configuration
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: prometheus-config
+  namespace: aura-ai
+  labels:
+    app.kubernetes.io/name: aura-ai-platform
+    app.kubernetes.io/component: prometheus-config
+data:
+  prometheus.yml: |
+    global:
+      scrape_interval: 15s
+      evaluation_interval: 15s
+
+    scrape_configs:
+      - job_name: 'prometheus'
+        static_configs:
+          - targets: ['localhost:9090']
+
+      - job_name: 'visual-analysis'
+        static_configs:
+          - targets: ['visual-analysis-service.aura-ai.svc.cluster.local:8080']
+        metrics_path: /metrics
+        scrape_interval: 30s
+
+      - job_name: 'outfit-recommendation'
+        static_configs:
+          - targets: ['outfit-recommendation-service.aura-ai.svc.cluster.local:8080']
+        metrics_path: /metrics
+        scrape_interval: 30s
+
+      - job_name: 'conversational-ai'
+        static_configs:
+          - targets: ['conversational-ai-service.aura-ai.svc.cluster.local:8080']
+        metrics_path: /metrics
+        scrape_interval: 30s
+
+      - job_name: 'triton-inference-server'
+        static_configs:
+          - targets: ['triton-service.aura-ai.svc.cluster.local:8002']
+        metrics_path: /metrics
+        scrape_interval: 15s
+
+      - job_name: 'nginx-gateway'
+        static_configs:
+          - targets: ['nginx-gateway-service.aura-ai.svc.cluster.local:9113']
+        metrics_path: /metrics
+        scrape_interval: 30s

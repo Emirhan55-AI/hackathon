@@ -1,0 +1,353 @@
+# DVC lock file for Aura AI Platform
+# This file tracks the exact state of pipeline stages and their dependencies
+# Generated automatically by DVC - do not edit manually
+
+schema: '2.0'
+stages:
+  prepare_visual_analysis_data:
+    cmd: python services/visual_analysis/src/data_preparation.py
+    deps:
+    - path: services/visual_analysis/src/data_preparation.py
+      hash: md5
+      md5: placeholder_hash_data_prep_visual
+      size: 12543
+    - path: data/fashionpedia/
+      hash: md5
+      md5: placeholder_hash_fashionpedia_data
+      size: 2147483648
+    params:
+      params.yaml:
+        visual_analysis.data_preparation.train_split: 0.8
+        visual_analysis.data_preparation.val_split: 0.2
+        visual_analysis.data_preparation.image_size:
+        - 800
+        - 800
+        visual_analysis.data_preparation.augmentation_config.horizontal_flip: true
+        visual_analysis.data_preparation.augmentation_config.rotation_range: 15
+        visual_analysis.data_preparation.augmentation_config.brightness_range:
+        - 0.8
+        - 1.2
+        visual_analysis.data_preparation.augmentation_config.contrast_range:
+        - 0.8
+        - 1.2
+        visual_analysis.data_preparation.augmentation_config.saturation_range:
+        - 0.8
+        - 1.2
+    outs:
+    - path: data/processed/visual_analysis/train/
+      hash: md5
+      md5: placeholder_hash_train_data
+      size: 1073741824
+    - path: data/processed/visual_analysis/val/
+      hash: md5
+      md5: placeholder_hash_val_data
+      size: 268435456
+    - path: data/processed/visual_analysis/annotations.json
+      hash: md5
+      md5: placeholder_hash_annotations
+      size: 1048576
+
+  train_visual_analysis_model:
+    cmd: python services/visual_analysis/src/train_model.py
+    deps:
+    - path: services/visual_analysis/src/train_model.py
+      hash: md5
+      md5: placeholder_hash_train_script
+      size: 8765
+    - path: services/visual_analysis/src/models/
+      hash: md5
+      md5: placeholder_hash_model_code
+      size: 32768
+    - path: data/processed/visual_analysis/
+      hash: md5
+      md5: placeholder_hash_processed_data
+      size: 1342177280
+    params:
+      params.yaml:
+        visual_analysis.model.backbone: resnet50
+        visual_analysis.model.num_classes: 46
+        visual_analysis.training.epochs: 50
+        visual_analysis.training.batch_size: 8
+        visual_analysis.training.learning_rate: 0.0001
+        visual_analysis.training.weight_decay: 0.0001
+    outs:
+    - path: models/visual_analysis/detr_fashion_detector.pth
+      hash: md5
+      md5: placeholder_hash_model_weights
+      size: 167772160
+    - path: models/visual_analysis/training_metrics.json
+      hash: md5
+      md5: placeholder_hash_training_metrics
+      size: 2048
+    metrics:
+    - path: experiments/visual_analysis/metrics.json
+      hash: md5
+      md5: placeholder_hash_metrics
+      size: 1024
+
+  prepare_outfit_data:
+    cmd: python services/outfit_recommendation/src/data_preparation.py
+    deps:
+    - path: services/outfit_recommendation/src/data_preparation.py
+      hash: md5
+      md5: placeholder_hash_outfit_data_prep
+      size: 9876
+    - path: data/outfit_datasets/
+      hash: md5
+      md5: placeholder_hash_outfit_datasets
+      size: 536870912
+    - path: data/fashion_items/
+      hash: md5
+      md5: placeholder_hash_fashion_items
+      size: 268435456
+    params:
+      params.yaml:
+        outfit_recommendation.data_preparation.min_outfit_size: 2
+        outfit_recommendation.data_preparation.max_outfit_size: 8
+        outfit_recommendation.data_preparation.compatibility_threshold: 0.6
+    outs:
+    - path: data/processed/outfit_recommendation/outfits.json
+      hash: md5
+      md5: placeholder_hash_processed_outfits
+      size: 52428800
+    - path: data/processed/outfit_recommendation/item_embeddings.npy
+      hash: md5
+      md5: placeholder_hash_item_embeddings
+      size: 134217728
+    - path: data/processed/outfit_recommendation/compatibility_matrix.npy
+      hash: md5
+      md5: placeholder_hash_compatibility_matrix
+      size: 67108864
+
+  train_outfit_model:
+    cmd: python services/outfit_recommendation/src/train_model.py
+    deps:
+    - path: services/outfit_recommendation/src/train_model.py
+      hash: md5
+      md5: placeholder_hash_outfit_train_script
+      size: 7654
+    - path: services/outfit_recommendation/src/models/
+      hash: md5
+      md5: placeholder_hash_outfit_model_code
+      size: 24576
+    - path: data/processed/outfit_recommendation/
+      hash: md5
+      md5: placeholder_hash_outfit_processed_data
+      size: 254148608
+    params:
+      params.yaml:
+        outfit_recommendation.model.hidden_dim: 512
+        outfit_recommendation.model.num_layers: 6
+        outfit_recommendation.model.num_heads: 8
+        outfit_recommendation.model.dropout: 0.1
+        outfit_recommendation.training.epochs: 30
+        outfit_recommendation.training.batch_size: 32
+        outfit_recommendation.training.learning_rate: 0.0002
+    outs:
+    - path: models/outfit_recommendation/outfit_transformer.pth
+      hash: md5
+      md5: placeholder_hash_outfit_model
+      size: 83886080
+    - path: models/outfit_recommendation/item_encoder.pth
+      hash: md5
+      md5: placeholder_hash_item_encoder
+      size: 41943040
+    - path: models/outfit_recommendation/training_metrics.json
+      hash: md5
+      md5: placeholder_hash_outfit_training_metrics
+      size: 1536
+    metrics:
+    - path: experiments/outfit_recommendation/metrics.json
+      hash: md5
+      md5: placeholder_hash_outfit_metrics
+      size: 896
+
+  prepare_conversational_data:
+    cmd: python services/conversational_ai/src/data_preparation.py
+    deps:
+    - path: services/conversational_ai/src/data_preparation.py
+      hash: md5
+      md5: placeholder_hash_conv_data_prep
+      size: 11234
+    - path: data/conversations/
+      hash: md5
+      md5: placeholder_hash_conversations
+      size: 104857600
+    - path: data/fashion_knowledge/
+      hash: md5
+      md5: placeholder_hash_fashion_knowledge
+      size: 52428800
+    params:
+      params.yaml:
+        conversational_ai.data_preparation.max_length: 2048
+        conversational_ai.data_preparation.instruction_format: alpaca
+        conversational_ai.data_preparation.context_window: 4096
+    outs:
+    - path: data/processed/conversational_ai/training_data.jsonl
+      hash: md5
+      md5: placeholder_hash_training_data
+      size: 78643200
+    - path: data/processed/conversational_ai/validation_data.jsonl
+      hash: md5
+      md5: placeholder_hash_validation_data
+      size: 9830400
+
+  finetune_conversational_model:
+    cmd: python services/conversational_ai/src/finetune.py
+    deps:
+    - path: services/conversational_ai/src/finetune.py
+      hash: md5
+      md5: placeholder_hash_finetune_script
+      size: 15678
+    - path: services/conversational_ai/src/models/
+      hash: md5
+      md5: placeholder_hash_conv_model_code
+      size: 40960
+    - path: data/processed/conversational_ai/
+      hash: md5
+      md5: placeholder_hash_conv_processed_data
+      size: 88473600
+    params:
+      params.yaml:
+        conversational_ai.model.base_model_name: meta-llama/Llama-2-7b-chat-hf
+        conversational_ai.model.lora_r: 64
+        conversational_ai.model.lora_alpha: 16
+        conversational_ai.model.lora_dropout: 0.1
+        conversational_ai.training.epochs: 3
+        conversational_ai.training.batch_size: 1
+        conversational_ai.training.learning_rate: 0.0002
+    outs:
+    - path: models/conversational_ai/qlora_adapter/
+      hash: md5
+      md5: placeholder_hash_qlora_adapter
+      size: 201326592
+    - path: models/conversational_ai/training_metrics.json
+      hash: md5
+      md5: placeholder_hash_conv_training_metrics
+      size: 2560
+    metrics:
+    - path: experiments/conversational_ai/metrics.json
+      hash: md5
+      md5: placeholder_hash_conv_metrics
+      size: 1152
+
+  build_vector_store:
+    cmd: python services/conversational_ai/src/build_vector_store.py
+    deps:
+    - path: services/conversational_ai/src/build_vector_store.py
+      hash: md5
+      md5: placeholder_hash_vector_store_script
+      size: 8901
+    - path: data/fashion_knowledge/
+      hash: md5
+      md5: placeholder_hash_knowledge_base
+      size: 52428800
+    - path: data/product_catalogs/
+      hash: md5
+      md5: placeholder_hash_product_catalogs
+      size: 134217728
+    params:
+      params.yaml:
+        conversational_ai.vector_store.embedding_model: sentence-transformers/all-MiniLM-L6-v2
+        conversational_ai.vector_store.chunk_size: 1000
+        conversational_ai.vector_store.chunk_overlap: 200
+        conversational_ai.vector_store.index_type: faiss
+    outs:
+    - path: models/conversational_ai/vector_store/
+      hash: md5
+      md5: placeholder_hash_vector_store
+      size: 419430400
+    - path: models/conversational_ai/vector_index.faiss
+      hash: md5
+      md5: placeholder_hash_faiss_index
+      size: 209715200
+
+  evaluate_models:
+    cmd: python scripts/evaluate_models.py
+    deps:
+    - path: scripts/evaluate_models.py
+      hash: md5
+      md5: placeholder_hash_eval_script
+      size: 6789
+    - path: models/visual_analysis/
+      hash: md5
+      md5: placeholder_hash_visual_models
+      size: 169820160
+    - path: models/outfit_recommendation/
+      hash: md5
+      md5: placeholder_hash_outfit_models
+      size: 125829120
+    - path: models/conversational_ai/
+      hash: md5
+      md5: placeholder_hash_conv_models
+      size: 621756192
+    - path: data/test/
+      hash: md5
+      md5: placeholder_hash_test_data
+      size: 536870912
+    params:
+      params.yaml:
+        evaluation.test_batch_size: 16
+        evaluation.metrics.visual_analysis:
+        - mAP
+        - precision
+        - recall
+        - f1
+        evaluation.metrics.outfit_recommendation:
+        - ndcg@10
+        - hit_rate@10
+        - diversity
+        - coverage
+        evaluation.metrics.conversational_ai:
+        - bleu
+        - rouge
+        - perplexity
+        - human_eval
+    outs:
+    - path: evaluation/results.json
+      hash: md5
+      md5: placeholder_hash_eval_results
+      size: 4096
+    - path: evaluation/confusion_matrices/
+      hash: md5
+      md5: placeholder_hash_confusion_matrices
+      size: 32768
+    metrics:
+    - path: evaluation/model_performance.json
+      hash: md5
+      md5: placeholder_hash_model_performance
+      size: 2048
+
+  optimize_models:
+    cmd: python scripts/optimize_models.py
+    deps:
+    - path: scripts/optimize_models.py
+      hash: md5
+      md5: placeholder_hash_optimize_script
+      size: 5432
+    - path: models/visual_analysis/detr_fashion_detector.pth
+      hash: md5
+      md5: placeholder_hash_visual_model_weights
+      size: 167772160
+    - path: models/outfit_recommendation/outfit_transformer.pth
+      hash: md5
+      md5: placeholder_hash_outfit_model_weights
+      size: 83886080
+    params:
+      params.yaml:
+        optimization.precision: fp16
+        optimization.batch_size: 1
+        optimization.max_workspace_size: 1000000000
+    outs:
+    - path: models/optimized/visual_analysis_tensorrt.engine
+      hash: md5
+      md5: placeholder_hash_visual_tensorrt
+      size: 83886080
+    - path: models/optimized/outfit_recommendation_tensorrt.engine
+      hash: md5
+      md5: placeholder_hash_outfit_tensorrt
+      size: 41943040
+    - path: models/optimized/optimization_report.json
+      hash: md5
+      md5: placeholder_hash_optimization_report
+      size: 1024

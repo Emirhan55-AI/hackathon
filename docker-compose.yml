@@ -1,0 +1,249 @@
+# Aura AI Platform - Docker Compose Orchestration
+# Complete microservices deployment with API Gateway
+
+version: '3.8'
+
+services:
+  # Nginx API Gateway
+  nginx:
+    image: nginx:alpine
+    container_name: aura_api_gateway
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./gateway/nginx.conf:/etc/nginx/nginx.conf:ro
+      - nginx_logs:/var/log/nginx
+    depends_on:
+      - visual_analysis_service
+      - outfit_recommendation_service
+      - conversational_ai_service
+    restart: unless-stopped
+    networks:
+      - aura_network
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # Visual Analysis Service (DETR-based)
+  visual_analysis_service:
+    build:
+      context: ./services/visual_analysis
+      dockerfile: Dockerfile
+    container_name: aura_visual_analysis
+    expose:
+      - "8000"
+    environment:
+      - MODEL_PATH=/app/models
+      - DEVICE=cuda
+      - LOG_LEVEL=INFO
+      - MAX_WORKERS=4
+    volumes:
+      - visual_analysis_models:/app/models
+      - visual_analysis_logs:/app/logs
+    restart: unless-stopped
+    networks:
+      - aura_network
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # Outfit Recommendation Service (OutfitTransformer)
+  outfit_recommendation_service:
+    build:
+      context: ./services/outfit_recommendation
+      dockerfile: Dockerfile
+    container_name: aura_outfit_recommendation
+    expose:
+      - "8001"
+    environment:
+      - MODEL_PATH=/app/models
+      - DEVICE=cuda
+      - LOG_LEVEL=INFO
+      - MAX_WORKERS=4
+      - CACHE_SIZE=1000
+    volumes:
+      - outfit_recommendation_models:/app/models
+      - outfit_recommendation_logs:/app/logs
+    restart: unless-stopped
+    networks:
+      - aura_network
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8001/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # Conversational AI Service (QLoRA + RAG)
+  conversational_ai_service:
+    build:
+      context: ./services/conversational_ai
+      dockerfile: Dockerfile
+    container_name: aura_conversational_ai
+    expose:
+      - "8003"
+    environment:
+      - MODEL_PATH=/app/models
+      - VECTOR_STORE_PATH=/app/vector_store
+      - DEVICE=cuda
+      - LOG_LEVEL=INFO
+      - MAX_WORKERS=2
+      - HF_TOKEN=${HF_TOKEN}
+      - PINECONE_API_KEY=${PINECONE_API_KEY}
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+    volumes:
+      - conversational_ai_models:/app/models
+      - conversational_ai_vector_store:/app/vector_store
+      - conversational_ai_logs:/app/logs
+    restart: unless-stopped
+    networks:
+      - aura_network
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8003/health"]
+      interval: 30s
+      timeout: 15s
+      retries: 3
+
+  # Redis Cache (for session management and caching)
+  redis:
+    image: redis:7-alpine
+    container_name: aura_redis
+    expose:
+      - "6379"
+    volumes:
+      - redis_data:/data
+    restart: unless-stopped
+    networks:
+      - aura_network
+    command: redis-server --appendonly yes --maxmemory 512mb --maxmemory-policy allkeys-lru
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+  # PostgreSQL Database (for user data and conversation history)
+  postgres:
+    image: postgres:15-alpine
+    container_name: aura_postgres
+    expose:
+      - "5432"
+    environment:
+      - POSTGRES_DB=aura_platform
+      - POSTGRES_USER=aura_user
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-aura_secure_password}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./database/init:/docker-entrypoint-initdb.d
+    restart: unless-stopped
+    networks:
+      - aura_network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U aura_user -d aura_platform"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+  # Prometheus Monitoring
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: aura_prometheus
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus_data:/prometheus
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--web.console.libraries=/etc/prometheus/console_libraries'
+      - '--web.console.templates=/etc/prometheus/consoles'
+      - '--storage.tsdb.retention.time=200h'
+      - '--web.enable-lifecycle'
+    restart: unless-stopped
+    networks:
+      - aura_network
+
+  # Grafana Dashboards
+  grafana:
+    image: grafana/grafana:latest
+    container_name: aura_grafana
+    ports:
+      - "3000:3000"
+    environment:
+      - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_PASSWORD:-admin}
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./monitoring/grafana/provisioning:/etc/grafana/provisioning
+    restart: unless-stopped
+    networks:
+      - aura_network
+    depends_on:
+      - prometheus
+
+# Named volumes for persistent data
+volumes:
+  # Model storage
+  visual_analysis_models:
+    driver: local
+  outfit_recommendation_models:
+    driver: local
+  conversational_ai_models:
+    driver: local
+  conversational_ai_vector_store:
+    driver: local
+  
+  # Log storage
+  visual_analysis_logs:
+    driver: local
+  outfit_recommendation_logs:
+    driver: local
+  conversational_ai_logs:
+    driver: local
+  nginx_logs:
+    driver: local
+  
+  # Database storage
+  redis_data:
+    driver: local
+  postgres_data:
+    driver: local
+  
+  # Monitoring storage
+  prometheus_data:
+    driver: local
+  grafana_data:
+    driver: local
+
+# Custom network for service communication
+networks:
+  aura_network:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.20.0.0/16

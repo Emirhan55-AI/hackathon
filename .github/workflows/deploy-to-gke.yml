@@ -1,0 +1,414 @@
+# Deploy to Google Kubernetes Engine (GKE) Workflow for Aura AI Platform
+# This workflow deploys the application to GKE cluster
+
+name: Deploy to GKE
+
+on:
+  workflow_run:
+    workflows: ["Build and Push Docker Images"]
+    types:
+      - completed
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Deployment environment'
+        required: true
+        default: 'staging'
+        type: choice
+        options:
+        - staging
+        - production
+      image_tag:
+        description: 'Image tag to deploy (leave empty for latest)'
+        required: false
+        type: string
+
+env:
+  GCP_PROJECT_ID: ${{ secrets.GCP_PROJECT_ID }}
+  GKE_CLUSTER: ${{ secrets.GKE_CLUSTER_NAME }}
+  GKE_ZONE: ${{ secrets.GKE_ZONE }}
+  REGISTRY: gcr.io
+
+jobs:
+  # Pre-deployment checks
+  pre-deployment-checks:
+    name: Pre-deployment Checks
+    runs-on: ubuntu-latest
+    if: github.event.workflow_run.conclusion == 'success' || github.event_name == 'workflow_dispatch'
+    
+    outputs:
+      should_deploy: ${{ steps.check.outputs.should_deploy }}
+      image_tag: ${{ steps.check.outputs.image_tag }}
+      environment: ${{ steps.check.outputs.environment }}
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      
+    - name: Determine deployment parameters
+      id: check
+      run: |
+        if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+          ENVIRONMENT="${{ github.event.inputs.environment }}"
+          IMAGE_TAG="${{ github.event.inputs.image_tag }}"
+          SHOULD_DEPLOY="true"
+        else
+          ENVIRONMENT="staging"
+          IMAGE_TAG="main-$(echo ${{ github.sha }} | cut -c1-8)"
+          SHOULD_DEPLOY="true"
+        fi
+        
+        if [[ -z "$IMAGE_TAG" ]]; then
+          IMAGE_TAG="latest"
+        fi
+        
+        echo "should_deploy=${SHOULD_DEPLOY}" >> $GITHUB_OUTPUT
+        echo "image_tag=${IMAGE_TAG}" >> $GITHUB_OUTPUT
+        echo "environment=${ENVIRONMENT}" >> $GITHUB_OUTPUT
+        
+        echo "Deployment Environment: ${ENVIRONMENT}"
+        echo "Image Tag: ${IMAGE_TAG}"
+        echo "Should Deploy: ${SHOULD_DEPLOY}"
+
+  # Deploy to staging
+  deploy-staging:
+    name: Deploy to Staging
+    runs-on: ubuntu-latest
+    needs: pre-deployment-checks
+    if: needs.pre-deployment-checks.outputs.should_deploy == 'true' && needs.pre-deployment-checks.outputs.environment == 'staging'
+    environment:
+      name: staging
+      url: https://staging.aura-ai.com
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      
+    - name: Authenticate to Google Cloud
+      uses: google-github-actions/auth@v1
+      with:
+        credentials_json: ${{ secrets.GCP_SA_KEY }}
+        
+    - name: Set up Cloud SDK
+      uses: google-github-actions/setup-gcloud@v1
+      
+    - name: Get GKE credentials
+      run: |
+        gcloud container clusters get-credentials ${{ env.GKE_CLUSTER }} --zone ${{ env.GKE_ZONE }} --project ${{ env.GCP_PROJECT_ID }}
+        
+    - name: Set up kubectl
+      uses: azure/setup-kubectl@v3
+      with:
+        version: 'latest'
+        
+    - name: Update image tags in staging manifests
+      run: |
+        IMAGE_TAG="${{ needs.pre-deployment-checks.outputs.image_tag }}"
+        
+        # Create staging namespace if it doesn't exist
+        kubectl create namespace aura-ai-staging --dry-run=client -o yaml | kubectl apply -f -
+        
+        # Copy and modify manifests for staging
+        mkdir -p staging-manifests
+        cp kubernetes/*.yaml staging-manifests/
+        
+        # Update namespace to staging
+        sed -i 's/namespace: aura-ai/namespace: aura-ai-staging/g' staging-manifests/*.yaml
+        sed -i 's/name: aura-ai$/name: aura-ai-staging/g' staging-manifests/namespace.yaml
+        
+        # Update image tags
+        sed -i "s|gcr.io/${{ env.GCP_PROJECT_ID }}/aura-visual-analysis:.*|gcr.io/${{ env.GCP_PROJECT_ID }}/aura-visual-analysis:${IMAGE_TAG}|g" staging-manifests/visual-analysis-deployment.yaml
+        sed -i "s|gcr.io/${{ env.GCP_PROJECT_ID }}/aura-outfit-recommendation:.*|gcr.io/${{ env.GCP_PROJECT_ID }}/aura-outfit-recommendation:${IMAGE_TAG}|g" staging-manifests/outfit-recommendation-deployment.yaml
+        sed -i "s|gcr.io/${{ env.GCP_PROJECT_ID }}/aura-conversational-ai:.*|gcr.io/${{ env.GCP_PROJECT_ID }}/aura-conversational-ai:${IMAGE_TAG}|g" staging-manifests/conversational-ai-deployment.yaml
+        sed -i "s|gcr.io/${{ env.GCP_PROJECT_ID }}/aura-nginx-gateway:.*|gcr.io/${{ env.GCP_PROJECT_ID }}/aura-nginx-gateway:${IMAGE_TAG}|g" staging-manifests/nginx-gateway-deployment.yaml
+        
+        # Update ingress host for staging
+        sed -i 's/host: aura-ai.com/host: staging.aura-ai.com/g' staging-manifests/ingress.yaml
+        
+    - name: Deploy to staging
+      run: |
+        echo "🚀 Deploying to staging environment..."
+        
+        # Apply namespace first
+        kubectl apply -f staging-manifests/namespace.yaml
+        
+        # Apply secrets and configs
+        kubectl apply -f staging-manifests/secrets.yaml
+        kubectl apply -f staging-manifests/configmaps.yaml
+        kubectl apply -f staging-manifests/persistent-volumes.yaml
+        
+        # Deploy databases
+        kubectl apply -f staging-manifests/database-deployments.yaml
+        kubectl wait --for=condition=Available deployment/postgresql-deployment -n aura-ai-staging --timeout=300s
+        kubectl wait --for=condition=Available deployment/redis-deployment -n aura-ai-staging --timeout=300s
+        
+        # Deploy Triton server
+        kubectl apply -f staging-manifests/triton-deployment.yaml
+        kubectl wait --for=condition=Available deployment/triton-inference-server-deployment -n aura-ai-staging --timeout=600s
+        
+        # Deploy AI services
+        kubectl apply -f staging-manifests/visual-analysis-deployment.yaml
+        kubectl apply -f staging-manifests/outfit-recommendation-deployment.yaml
+        kubectl apply -f staging-manifests/conversational-ai-deployment.yaml
+        
+        # Wait for AI services to be ready
+        kubectl wait --for=condition=Available deployment/visual-analysis-deployment -n aura-ai-staging --timeout=600s
+        kubectl wait --for=condition=Available deployment/outfit-recommendation-deployment -n aura-ai-staging --timeout=600s
+        kubectl wait --for=condition=Available deployment/conversational-ai-deployment -n aura-ai-staging --timeout=600s
+        
+        # Deploy gateway and ingress
+        kubectl apply -f staging-manifests/nginx-gateway-deployment.yaml
+        kubectl wait --for=condition=Available deployment/nginx-gateway-deployment -n aura-ai-staging --timeout=300s
+        
+        kubectl apply -f staging-manifests/ingress.yaml
+        
+        echo "✅ Staging deployment completed!"
+        
+    - name: Health check
+      run: |
+        echo "🏥 Performing health checks..."
+        
+        # Wait for ingress to get external IP
+        timeout=300
+        while [[ $timeout -gt 0 ]]; do
+          INGRESS_IP=$(kubectl get ingress aura-ai-ingress -n aura-ai-staging -o jsonpath='{.status.loadBalancer.ingress[0].ip}' 2>/dev/null || echo "")
+          if [[ -n "$INGRESS_IP" && "$INGRESS_IP" != "null" ]]; then
+            echo "Ingress IP: $INGRESS_IP"
+            break
+          fi
+          echo "Waiting for ingress IP... ($timeout seconds remaining)"
+          sleep 10
+          timeout=$((timeout - 10))
+        done
+        
+        # Check pod health
+        kubectl get pods -n aura-ai-staging
+        
+        # Check service endpoints
+        kubectl get endpoints -n aura-ai-staging
+        
+        echo "✅ Health checks completed!"
+
+  # Deploy to production
+  deploy-production:
+    name: Deploy to Production
+    runs-on: ubuntu-latest
+    needs: pre-deployment-checks
+    if: needs.pre-deployment-checks.outputs.should_deploy == 'true' && needs.pre-deployment-checks.outputs.environment == 'production'
+    environment:
+      name: production
+      url: https://aura-ai.com
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      
+    - name: Authenticate to Google Cloud
+      uses: google-github-actions/auth@v1
+      with:
+        credentials_json: ${{ secrets.GCP_SA_KEY }}
+        
+    - name: Set up Cloud SDK
+      uses: google-github-actions/setup-gcloud@v1
+      
+    - name: Get GKE credentials
+      run: |
+        gcloud container clusters get-credentials ${{ env.GKE_CLUSTER }} --zone ${{ env.GKE_ZONE }} --project ${{ env.GCP_PROJECT_ID }}
+        
+    - name: Set up kubectl
+      uses: azure/setup-kubectl@v3
+      with:
+        version: 'latest'
+        
+    - name: Pre-deployment backup
+      run: |
+        echo "📦 Creating pre-deployment backup..."
+        
+        # Backup current deployments
+        mkdir -p backup
+        kubectl get deployments -n aura-ai -o yaml > backup/deployments-backup.yaml
+        kubectl get configmaps -n aura-ai -o yaml > backup/configmaps-backup.yaml
+        kubectl get services -n aura-ai -o yaml > backup/services-backup.yaml
+        
+        # Upload backup to artifact
+        echo "Backup created at $(date)" > backup/backup-info.txt
+        
+    - name: Update image tags in production manifests
+      run: |
+        IMAGE_TAG="${{ needs.pre-deployment-checks.outputs.image_tag }}"
+        
+        # Update image tags
+        sed -i "s|gcr.io/${{ env.GCP_PROJECT_ID }}/aura-visual-analysis:.*|gcr.io/${{ env.GCP_PROJECT_ID }}/aura-visual-analysis:${IMAGE_TAG}|g" kubernetes/visual-analysis-deployment.yaml
+        sed -i "s|gcr.io/${{ env.GCP_PROJECT_ID }}/aura-outfit-recommendation:.*|gcr.io/${{ env.GCP_PROJECT_ID }}/aura-outfit-recommendation:${IMAGE_TAG}|g" kubernetes/outfit-recommendation-deployment.yaml
+        sed -i "s|gcr.io/${{ env.GCP_PROJECT_ID }}/aura-conversational-ai:.*|gcr.io/${{ env.GCP_PROJECT_ID }}/aura-conversational-ai:${IMAGE_TAG}|g" kubernetes/conversational-ai-deployment.yaml
+        sed -i "s|gcr.io/${{ env.GCP_PROJECT_ID }}/aura-nginx-gateway:.*|gcr.io/${{ env.GCP_PROJECT_ID }}/aura-nginx-gateway:${IMAGE_TAG}|g" kubernetes/nginx-gateway-deployment.yaml
+        
+    - name: Deploy to production with rolling update
+      run: |
+        echo "🚀 Deploying to production environment..."
+        
+        # Apply configurations (safe to reapply)
+        kubectl apply -f kubernetes/namespace.yaml
+        kubectl apply -f kubernetes/secrets.yaml
+        kubectl apply -f kubernetes/configmaps.yaml
+        kubectl apply -f kubernetes/persistent-volumes.yaml
+        
+        # Deploy/update databases (with care)
+        kubectl apply -f kubernetes/database-deployments.yaml
+        
+        # Deploy/update Triton server
+        kubectl apply -f kubernetes/triton-deployment.yaml
+        
+        # Rolling update for AI services
+        kubectl apply -f kubernetes/visual-analysis-deployment.yaml
+        kubectl rollout status deployment/visual-analysis-deployment -n aura-ai --timeout=600s
+        
+        kubectl apply -f kubernetes/outfit-recommendation-deployment.yaml
+        kubectl rollout status deployment/outfit-recommendation-deployment -n aura-ai --timeout=600s
+        
+        kubectl apply -f kubernetes/conversational-ai-deployment.yaml
+        kubectl rollout status deployment/conversational-ai-deployment -n aura-ai --timeout=600s
+        
+        # Update gateway
+        kubectl apply -f kubernetes/nginx-gateway-deployment.yaml
+        kubectl rollout status deployment/nginx-gateway-deployment -n aura-ai --timeout=300s
+        
+        # Update ingress
+        kubectl apply -f kubernetes/ingress.yaml
+        
+        echo "✅ Production deployment completed!"
+        
+    - name: Post-deployment verification
+      run: |
+        echo "🔍 Performing post-deployment verification..."
+        
+        # Check all pods are running
+        kubectl get pods -n aura-ai
+        
+        # Check deployment status
+        kubectl get deployments -n aura-ai
+        
+        # Verify services are accessible
+        kubectl get services -n aura-ai
+        
+        # Check ingress
+        kubectl get ingress -n aura-ai
+        
+        # Check for any failing pods
+        FAILED_PODS=$(kubectl get pods -n aura-ai --field-selector=status.phase!=Running,status.phase!=Succeeded -o name)
+        if [[ -n "$FAILED_PODS" ]]; then
+          echo "⚠️ Found failed pods:"
+          echo "$FAILED_PODS"
+          kubectl describe pods -n aura-ai --field-selector=status.phase!=Running,status.phase!=Succeeded
+        else
+          echo "✅ All pods are running successfully!"
+        fi
+        
+    - name: Upload backup artifacts
+      uses: actions/upload-artifact@v3
+      if: always()
+      with:
+        name: production-backup-${{ github.run_number }}
+        path: backup/
+        retention-days: 30
+
+  # Rollback job (manual trigger only)
+  rollback:
+    name: Rollback Deployment
+    runs-on: ubuntu-latest
+    if: failure() && (needs.deploy-staging.result == 'failure' || needs.deploy-production.result == 'failure')
+    needs: [pre-deployment-checks, deploy-staging, deploy-production]
+    environment:
+      name: ${{ needs.pre-deployment-checks.outputs.environment }}
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      
+    - name: Authenticate to Google Cloud
+      uses: google-github-actions/auth@v1
+      with:
+        credentials_json: ${{ secrets.GCP_SA_KEY }}
+        
+    - name: Set up Cloud SDK
+      uses: google-github-actions/setup-gcloud@v1
+      
+    - name: Get GKE credentials
+      run: |
+        gcloud container clusters get-credentials ${{ env.GKE_CLUSTER }} --zone ${{ env.GKE_ZONE }} --project ${{ env.GCP_PROJECT_ID }}
+        
+    - name: Set up kubectl
+      uses: azure/setup-kubectl@v3
+      with:
+        version: 'latest'
+        
+    - name: Rollback deployments
+      run: |
+        NAMESPACE="aura-ai"
+        if [[ "${{ needs.pre-deployment-checks.outputs.environment }}" == "staging" ]]; then
+          NAMESPACE="aura-ai-staging"
+        fi
+        
+        echo "🔄 Rolling back deployments in namespace: $NAMESPACE"
+        
+        # Rollback all deployments
+        kubectl rollout undo deployment/visual-analysis-deployment -n $NAMESPACE
+        kubectl rollout undo deployment/outfit-recommendation-deployment -n $NAMESPACE
+        kubectl rollout undo deployment/conversational-ai-deployment -n $NAMESPACE
+        kubectl rollout undo deployment/nginx-gateway-deployment -n $NAMESPACE
+        
+        # Wait for rollbacks to complete
+        kubectl rollout status deployment/visual-analysis-deployment -n $NAMESPACE --timeout=300s
+        kubectl rollout status deployment/outfit-recommendation-deployment -n $NAMESPACE --timeout=300s
+        kubectl rollout status deployment/conversational-ai-deployment -n $NAMESPACE --timeout=300s
+        kubectl rollout status deployment/nginx-gateway-deployment -n $NAMESPACE --timeout=300s
+        
+        echo "✅ Rollback completed!"
+
+  # Deployment summary
+  deployment-summary:
+    name: Deployment Summary
+    runs-on: ubuntu-latest
+    needs: [pre-deployment-checks, deploy-staging, deploy-production]
+    if: always()
+    
+    steps:
+    - name: Generate deployment summary
+      run: |
+        echo "📊 Aura AI Platform Deployment Summary"
+        echo "====================================="
+        echo ""
+        echo "🏷️ Deployment Details:"
+        echo "• Environment: ${{ needs.pre-deployment-checks.outputs.environment }}"
+        echo "• Image Tag: ${{ needs.pre-deployment-checks.outputs.image_tag }}"
+        echo "• Triggered by: ${{ github.event_name }}"
+        echo "• Actor: ${{ github.actor }}"
+        echo "• Commit: ${{ github.sha }}"
+        echo ""
+        echo "📋 Job Results:"
+        echo "• Pre-deployment checks: ${{ needs.pre-deployment-checks.result }}"
+        echo "• Staging deployment: ${{ needs.deploy-staging.result || 'skipped' }}"
+        echo "• Production deployment: ${{ needs.deploy-production.result || 'skipped' }}"
+        echo ""
+        
+        if [[ "${{ needs.deploy-staging.result }}" == "success" ]]; then
+          echo "✅ Staging deployment successful!"
+          echo "🔗 Staging URL: https://staging.aura-ai.com"
+        fi
+        
+        if [[ "${{ needs.deploy-production.result }}" == "success" ]]; then
+          echo "✅ Production deployment successful!"
+          echo "🔗 Production URL: https://aura-ai.com"
+        fi
+        
+        if [[ "${{ needs.deploy-staging.result }}" == "failure" || "${{ needs.deploy-production.result }}" == "failure" ]]; then
+          echo "❌ Deployment failed - check logs and consider rollback"
+        fi
+        
+    - name: Create deployment notification
+      if: needs.pre-deployment-checks.outputs.environment == 'production'
+      run: |
+        # This could be extended to send Slack/email notifications
+        echo "🔔 Production deployment notification would be sent here"
+        echo "Details: Environment=${{ needs.pre-deployment-checks.outputs.environment }}, Tag=${{ needs.pre-deployment-checks.outputs.image_tag }}, Status=${{ needs.deploy-production.result }}"

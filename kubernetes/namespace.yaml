@@ -1,0 +1,109 @@
+# Aura AI Platform - Kubernetes Namespace Configuration
+# Creates isolated namespace for all Aura AI services
+
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: aura-ai
+  labels:
+    name: aura-ai
+    app.kubernetes.io/name: aura-ai-platform
+    app.kubernetes.io/instance: production
+    app.kubernetes.io/version: "1.0.0"
+    app.kubernetes.io/component: namespace
+    app.kubernetes.io/part-of: aura-ai-platform
+    app.kubernetes.io/managed-by: kubernetes
+    environment: production
+  annotations:
+    description: "Aura AI Platform - Fashion AI Assistant Microservices"
+    contact: "devops@aura-ai.com"
+    created-by: "DevOps Team"
+    
+---
+# Resource Quota for the namespace to control resource usage
+apiVersion: v1
+kind: ResourceQuota
+metadata:
+  name: aura-ai-quota
+  namespace: aura-ai
+  labels:
+    app.kubernetes.io/name: aura-ai-platform
+    app.kubernetes.io/component: resource-quota
+spec:
+  hard:
+    # Compute Resources
+    requests.cpu: "20"        # Total CPU requests
+    requests.memory: 64Gi     # Total memory requests
+    requests.nvidia.com/gpu: "6"  # Total GPU requests
+    limits.cpu: "40"          # Total CPU limits
+    limits.memory: 128Gi      # Total memory limits
+    limits.nvidia.com/gpu: "6"    # Total GPU limits
+    
+    # Storage Resources
+    requests.storage: 500Gi   # Total storage requests
+    persistentvolumeclaims: "20"  # Max number of PVCs
+    
+    # Object counts
+    pods: "50"                # Max number of pods
+    services: "20"            # Max number of services
+    secrets: "20"             # Max number of secrets
+    configmaps: "20"          # Max number of configmaps
+    deployments.apps: "15"    # Max number of deployments
+    replicasets.apps: "30"    # Max number of replica sets
+
+---
+# Network Policy for security isolation
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: aura-ai-network-policy
+  namespace: aura-ai
+  labels:
+    app.kubernetes.io/name: aura-ai-platform
+    app.kubernetes.io/component: network-policy
+spec:
+  podSelector: {}  # Apply to all pods in namespace
+  policyTypes:
+  - Ingress
+  - Egress
+  
+  ingress:
+  # Allow ingress from nginx ingress controller
+  - from:
+    - namespaceSelector:
+        matchLabels:
+          name: ingress-nginx
+    ports:
+    - protocol: TCP
+      port: 8000
+    - protocol: TCP
+      port: 8001
+    - protocol: TCP
+      port: 8003
+  
+  # Allow inter-service communication within namespace
+  - from:
+    - namespaceSelector:
+        matchLabels:
+          name: aura-ai
+    
+  # Allow communication from monitoring namespace
+  - from:
+    - namespaceSelector:
+        matchLabels:
+          name: monitoring
+    ports:
+    - protocol: TCP
+      port: 8080  # Metrics port
+  
+  egress:
+  # Allow egress to any destination (can be restricted further)
+  - {}
+  
+  # Allow DNS resolution
+  - to: []
+    ports:
+    - protocol: UDP
+      port: 53
+    - protocol: TCP
+      port: 53

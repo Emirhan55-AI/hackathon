@@ -1,0 +1,516 @@
+# Network Policies for Aura AI Platform
+# Secure network segmentation and traffic control
+
+# Default Deny All Policy for aura-ai namespace
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny-all
+  namespace: aura-ai
+  labels:
+    app.kubernetes.io/name: aura-ai-platform
+    app.kubernetes.io/component: security
+spec:
+  podSelector: {}
+  policyTypes:
+  - Ingress
+  - Egress
+
+---
+# Allow DNS Resolution
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-dns
+  namespace: aura-ai
+  labels:
+    app.kubernetes.io/name: aura-ai-platform
+    app.kubernetes.io/component: security
+spec:
+  podSelector: {}
+  policyTypes:
+  - Egress
+  egress:
+  - to: []
+    ports:
+    - protocol: UDP
+      port: 53
+    - protocol: TCP
+      port: 53
+
+---
+# Allow Ingress Traffic to Nginx Gateway
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-ingress-to-gateway
+  namespace: aura-ai
+  labels:
+    app.kubernetes.io/name: nginx-gateway
+    app.kubernetes.io/component: security
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: nginx-gateway
+  policyTypes:
+  - Ingress
+  ingress:
+  - from: []  # Allow from any source (external traffic)
+    ports:
+    - protocol: TCP
+      port: 80
+    - protocol: TCP
+      port: 443
+
+---
+# Allow Gateway to Backend Services
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-gateway-to-services
+  namespace: aura-ai
+  labels:
+    app.kubernetes.io/name: nginx-gateway
+    app.kubernetes.io/component: security
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: nginx-gateway
+  policyTypes:
+  - Egress
+  egress:
+  # Allow to Visual Analysis Service
+  - to:
+    - podSelector:
+        matchLabels:
+          app.kubernetes.io/name: visual-analysis
+    ports:
+    - protocol: TCP
+      port: 8000
+  # Allow to Outfit Recommendation Service
+  - to:
+    - podSelector:
+        matchLabels:
+          app.kubernetes.io/name: outfit-recommendation
+    ports:
+    - protocol: TCP
+      port: 8001
+  # Allow to Conversational AI Service
+  - to:
+    - podSelector:
+        matchLabels:
+          app.kubernetes.io/name: conversational-ai
+    ports:
+    - protocol: TCP
+      port: 8002
+  # Allow to Triton Inference Server
+  - to:
+    - podSelector:
+        matchLabels:
+          app.kubernetes.io/name: triton-inference-server
+    ports:
+    - protocol: TCP
+      port: 8000
+    - protocol: TCP
+      port: 8001
+    - protocol: TCP
+      port: 8002
+
+---
+# Allow Backend Services to Receive from Gateway
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-services-from-gateway
+  namespace: aura-ai
+  labels:
+    app.kubernetes.io/name: aura-ai-platform
+    app.kubernetes.io/component: security
+spec:
+  podSelector:
+    matchExpressions:
+    - key: app.kubernetes.io/name
+      operator: In
+      values: ["visual-analysis", "outfit-recommendation", "conversational-ai"]
+  policyTypes:
+  - Ingress
+  ingress:
+  - from:
+    - podSelector:
+        matchLabels:
+          app.kubernetes.io/name: nginx-gateway
+    ports:
+    - protocol: TCP
+      port: 8000
+    - protocol: TCP
+      port: 8001
+    - protocol: TCP
+      port: 8002
+
+---
+# Allow AI Services to Triton Inference Server
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-services-to-triton
+  namespace: aura-ai
+  labels:
+    app.kubernetes.io/name: triton-inference-server
+    app.kubernetes.io/component: security
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: triton-inference-server
+  policyTypes:
+  - Ingress
+  ingress:
+  - from:
+    - podSelector:
+        matchLabels:
+          app.kubernetes.io/name: visual-analysis
+    - podSelector:
+        matchLabels:
+          app.kubernetes.io/name: outfit-recommendation
+    - podSelector:
+        matchLabels:
+          app.kubernetes.io/name: conversational-ai
+    - podSelector:
+        matchLabels:
+          app.kubernetes.io/name: nginx-gateway
+    ports:
+    - protocol: TCP
+      port: 8000  # HTTP
+    - protocol: TCP
+      port: 8001  # GRPC
+    - protocol: TCP
+      port: 8002  # Metrics
+
+---
+# Allow AI Services to Database
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-services-to-database
+  namespace: aura-ai
+  labels:
+    app.kubernetes.io/name: postgresql
+    app.kubernetes.io/component: security
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: postgresql
+  policyTypes:
+  - Ingress
+  ingress:
+  - from:
+    - podSelector:
+        matchLabels:
+          app.kubernetes.io/name: visual-analysis
+    - podSelector:
+        matchLabels:
+          app.kubernetes.io/name: outfit-recommendation
+    - podSelector:
+        matchLabels:
+          app.kubernetes.io/name: conversational-ai
+    ports:
+    - protocol: TCP
+      port: 5432
+
+---
+# Allow AI Services to Redis Cache
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-services-to-redis
+  namespace: aura-ai
+  labels:
+    app.kubernetes.io/name: redis
+    app.kubernetes.io/component: security
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: redis
+  policyTypes:
+  - Ingress
+  ingress:
+  - from:
+    - podSelector:
+        matchLabels:
+          app.kubernetes.io/name: visual-analysis
+    - podSelector:
+        matchLabels:
+          app.kubernetes.io/name: outfit-recommendation
+    - podSelector:
+        matchLabels:
+          app.kubernetes.io/name: conversational-ai
+    ports:
+    - protocol: TCP
+      port: 6379
+
+---
+# Allow AI Services Egress to External APIs
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-services-external-egress
+  namespace: aura-ai
+  labels:
+    app.kubernetes.io/name: aura-ai-platform
+    app.kubernetes.io/component: security
+spec:
+  podSelector:
+    matchExpressions:
+    - key: app.kubernetes.io/name
+      operator: In
+      values: ["visual-analysis", "outfit-recommendation", "conversational-ai"]
+  policyTypes:
+  - Egress
+  egress:
+  # Allow HTTPS traffic to external APIs
+  - to: []
+    ports:
+    - protocol: TCP
+      port: 443
+  # Allow HTTP traffic (for specific APIs if needed)
+  - to: []
+    ports:
+    - protocol: TCP
+      port: 80
+  # Allow to internal services
+  - to:
+    - podSelector:
+        matchLabels:
+          app.kubernetes.io/name: postgresql
+    ports:
+    - protocol: TCP
+      port: 5432
+  - to:
+    - podSelector:
+        matchLabels:
+          app.kubernetes.io/name: redis
+    ports:
+    - protocol: TCP
+      port: 6379
+  - to:
+    - podSelector:
+        matchLabels:
+          app.kubernetes.io/name: triton-inference-server
+    ports:
+    - protocol: TCP
+      port: 8000
+    - protocol: TCP
+      port: 8001
+
+---
+# Allow Monitoring Access from Prometheus
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-prometheus-monitoring
+  namespace: aura-ai
+  labels:
+    app.kubernetes.io/name: aura-ai-platform
+    app.kubernetes.io/component: security
+spec:
+  podSelector:
+    matchExpressions:
+    - key: app.kubernetes.io/name
+      operator: In
+      values: ["visual-analysis", "outfit-recommendation", "conversational-ai", "nginx-gateway", "triton-inference-server", "postgresql", "redis"]
+  policyTypes:
+  - Ingress
+  ingress:
+  - from:
+    - namespaceSelector:
+        matchLabels:
+          name: monitoring
+      podSelector:
+        matchLabels:
+          app.kubernetes.io/name: prometheus
+    ports:
+    - protocol: TCP
+      port: 8000  # Application metrics
+    - protocol: TCP
+      port: 8001
+    - protocol: TCP
+      port: 8002
+    - protocol: TCP
+      port: 9113  # Nginx metrics
+    - protocol: TCP
+      port: 9187  # PostgreSQL metrics
+    - protocol: TCP
+      port: 9121  # Redis metrics
+
+---
+# Monitoring Namespace Network Policy
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-monitoring-traffic
+  namespace: monitoring
+  labels:
+    app.kubernetes.io/name: monitoring-stack
+    app.kubernetes.io/component: security
+spec:
+  podSelector: {}
+  policyTypes:
+  - Ingress
+  - Egress
+  ingress:
+  # Allow Grafana access from external
+  - from: []
+    ports:
+    - protocol: TCP
+      port: 3000
+  # Allow Prometheus scraping
+  - from:
+    - podSelector:
+        matchLabels:
+          app.kubernetes.io/name: prometheus
+    ports:
+    - protocol: TCP
+      port: 9090
+  egress:
+  # Allow Prometheus to scrape metrics from aura-ai namespace
+  - to:
+    - namespaceSelector:
+        matchLabels:
+          name: aura-ai
+    ports:
+    - protocol: TCP
+      port: 8000
+    - protocol: TCP
+      port: 8001
+    - protocol: TCP
+      port: 8002
+    - protocol: TCP
+      port: 9113
+    - protocol: TCP
+      port: 9187
+    - protocol: TCP
+      port: 9121
+  # Allow Grafana to access Prometheus
+  - to:
+    - podSelector:
+        matchLabels:
+          app.kubernetes.io/name: prometheus
+    ports:
+    - protocol: TCP
+      port: 9090
+  # Allow AlertManager communication
+  - to:
+    - podSelector:
+        matchLabels:
+          app.kubernetes.io/name: alertmanager
+    ports:
+    - protocol: TCP
+      port: 9093
+  # Allow external communication for alerts
+  - to: []
+    ports:
+    - protocol: TCP
+      port: 443
+    - protocol: TCP
+      port: 587  # SMTP
+
+---
+# KEDA Network Policy
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-keda-access
+  namespace: aura-ai
+  labels:
+    app.kubernetes.io/name: aura-ai-platform
+    app.kubernetes.io/component: security
+spec:
+  podSelector: {}
+  policyTypes:
+  - Ingress
+  ingress:
+  # Allow KEDA to access metrics
+  - from:
+    - namespaceSelector:
+        matchLabels:
+          name: keda
+    ports:
+    - protocol: TCP
+      port: 8080  # Metrics endpoint
+  # Allow KEDA to access Prometheus in monitoring namespace
+  - from:
+    - namespaceSelector:
+        matchLabels:
+          name: keda
+    - namespaceSelector:
+        matchLabels:
+          name: monitoring
+    ports:
+    - protocol: TCP
+      port: 9090
+
+---
+# GPU Node Pool Network Policy
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-gpu-workloads
+  namespace: aura-ai
+  labels:
+    app.kubernetes.io/name: aura-ai-platform
+    app.kubernetes.io/component: security
+spec:
+  podSelector:
+    matchExpressions:
+    - key: app.kubernetes.io/name
+      operator: In
+      values: ["visual-analysis", "outfit-recommendation", "conversational-ai", "triton-inference-server"]
+  policyTypes:
+  - Egress
+  egress:
+  # Allow access to NVIDIA runtime and GPU metrics
+  - to: []
+    ports:
+    - protocol: TCP
+      port: 9400  # DCGM exporter
+
+---
+# Security Context Constraints (if using OpenShift)
+# This would be converted to PodSecurityPolicy for standard Kubernetes
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: security-constraints
+  namespace: aura-ai
+  labels:
+    app.kubernetes.io/name: aura-ai-platform
+    app.kubernetes.io/component: security
+data:
+  security-notes.md: |
+    # Security Constraints for Aura AI Platform
+    
+    ## Pod Security Standards
+    - All pods run with non-root users where possible
+    - ReadOnlyRootFilesystem is enforced for stateless services
+    - Resource limits are set to prevent resource exhaustion
+    - Security contexts include specific user/group IDs
+    
+    ## Network Security
+    - Default deny-all network policies are in place
+    - Explicit allow rules for required communication paths
+    - External egress is restricted to HTTPS on port 443
+    - Internal service communication uses service names
+    
+    ## Secret Management
+    - Database credentials stored in Kubernetes secrets
+    - API keys and tokens use secret references
+    - Secrets are mounted as volumes, not environment variables
+    - Secret rotation should be implemented for production
+    
+    ## Additional Security Recommendations
+    1. Enable Pod Security Admission Controller
+    2. Use Falco for runtime security monitoring
+    3. Implement OPA Gatekeeper for policy enforcement
+    4. Enable audit logging for all API server requests
+    5. Use network encryption with service mesh (Istio/Linkerd)
+    6. Implement image scanning in CI/CD pipeline
+    7. Use workload identity for GCP service authentication

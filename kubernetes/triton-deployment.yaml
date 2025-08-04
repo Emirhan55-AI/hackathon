@@ -1,0 +1,432 @@
+# NVIDIA Triton Inference Server - Kubernetes Deployment and Service
+# High-performance model serving for optimized AI inference
+
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: triton-inference-server-deployment
+  namespace: aura-ai
+  labels:
+    app.kubernetes.io/name: triton-inference-server
+    app.kubernetes.io/instance: production
+    app.kubernetes.io/version: "23.10"
+    app.kubernetes.io/component: inference-server
+    app.kubernetes.io/part-of: aura-ai-platform
+    app.kubernetes.io/managed-by: kubernetes
+spec:
+  replicas: 2
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+  selector:
+    matchLabels:
+      app: triton-inference-server
+  template:
+    metadata:
+      labels:
+        app: triton-inference-server
+        app.kubernetes.io/name: triton-inference-server
+        app.kubernetes.io/component: inference-server
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "8002"
+        prometheus.io/path: "/metrics"
+    spec:
+      serviceAccountName: aura-ai-service-account
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
+
+      initContainers:
+      # Model repository setup for Triton
+      - name: triton-model-setup
+        image: gcr.io/PROJECT_ID/aura-triton-model-converter:latest
+        imagePullPolicy: IfNotPresent
+        command:
+        - /bin/sh
+        - -c
+        - |
+          echo "Setting up Triton model repository..."
+          
+          # Create model repository structure
+          mkdir -p /triton-models/visual_analysis/1
+          mkdir -p /triton-models/outfit_recommendation/1
+          mkdir -p /triton-models/conversational_ai_embedding/1
+          
+          # Convert PyTorch models to TensorRT for optimal performance
+          if [ ! -f /triton-models/visual_analysis/1/model.plan ]; then
+            echo "Converting DETR model to TensorRT..."
+            python3 /scripts/convert_detr_to_tensorrt.py \
+              --input_model /models/detr-resnet-50 \
+              --output_path /triton-models/visual_analysis/1/model.plan \
+              --precision fp16 \
+              --max_batch_size 8
+          fi
+          
+          if [ ! -f /triton-models/outfit_recommendation/1/model.plan ]; then
+            echo "Converting OutfitTransformer to TensorRT..."
+            python3 /scripts/convert_outfit_transformer_to_tensorrt.py \
+              --input_model /models/outfit-transformer \
+              --output_path /triton-models/outfit_recommendation/1/model.plan \
+              --precision fp16 \
+              --max_batch_size 16
+          fi
+          
+          if [ ! -f /triton-models/conversational_ai_embedding/1/model.onnx ]; then
+            echo "Converting embedding model to ONNX..."
+            python3 /scripts/convert_embeddings_to_onnx.py \
+              --input_model /models/sentence-transformers \
+              --output_path /triton-models/conversational_ai_embedding/1/model.onnx
+          fi
+          
+          # Create Triton model configuration files
+          cat > /triton-models/visual_analysis/config.pbtxt << EOF
+          name: "visual_analysis"
+          platform: "tensorrt_plan"
+          max_batch_size: 8
+          input [
+            {
+              name: "input"
+              data_type: TYPE_FP32
+              format: FORMAT_NCHW
+              dims: [ 3, 224, 224 ]
+            }
+          ]
+          output [
+            {
+              name: "boxes"
+              data_type: TYPE_FP32
+              dims: [ -1, 4 ]
+            },
+            {
+              name: "scores"
+              data_type: TYPE_FP32
+              dims: [ -1 ]
+            },
+            {
+              name: "labels"
+              data_type: TYPE_INT32
+              dims: [ -1 ]
+            }
+          ]
+          dynamic_batching {
+            preferred_batch_size: [ 4, 8 ]
+            max_queue_delay_microseconds: 100000
+          }
+          instance_group [
+            {
+              count: 2
+              kind: KIND_GPU
+            }
+          ]
+          EOF
+          
+          cat > /triton-models/outfit_recommendation/config.pbtxt << EOF
+          name: "outfit_recommendation"
+          platform: "tensorrt_plan"
+          max_batch_size: 16
+          input [
+            {
+              name: "item_features"
+              data_type: TYPE_FP32
+              dims: [ -1, 512 ]
+            },
+            {
+              name: "context_features"
+              data_type: TYPE_FP32
+              dims: [ 128 ]
+            }
+          ]
+          output [
+            {
+              name: "compatibility_scores"
+              data_type: TYPE_FP32
+              dims: [ -1 ]
+            },
+            {
+              name: "style_embeddings"
+              data_type: TYPE_FP32
+              dims: [ -1, 256 ]
+            }
+          ]
+          dynamic_batching {
+            preferred_batch_size: [ 8, 16 ]
+            max_queue_delay_microseconds: 50000
+          }
+          instance_group [
+            {
+              count: 2
+              kind: KIND_GPU
+            }
+          ]
+          EOF
+          
+          cat > /triton-models/conversational_ai_embedding/config.pbtxt << EOF
+          name: "conversational_ai_embedding"
+          platform: "onnxruntime_onnx"
+          max_batch_size: 32
+          input [
+            {
+              name: "input_ids"
+              data_type: TYPE_INT64
+              dims: [ -1 ]
+            },
+            {
+              name: "attention_mask"
+              data_type: TYPE_INT64
+              dims: [ -1 ]
+            }
+          ]
+          output [
+            {
+              name: "embeddings"
+              data_type: TYPE_FP32
+              dims: [ 384 ]
+            }
+          ]
+          dynamic_batching {
+            preferred_batch_size: [ 16, 32 ]
+            max_queue_delay_microseconds: 25000
+          }
+          instance_group [
+            {
+              count: 1
+              kind: KIND_GPU
+            }
+          ]
+          EOF
+          
+          echo "Triton model repository setup completed"
+        volumeMounts:
+        - name: model-storage
+          mountPath: /models
+          readOnly: true
+        - name: triton-models-storage
+          mountPath: /triton-models
+        resources:
+          requests:
+            cpu: 2000m
+            memory: 8Gi
+            nvidia.com/gpu: 1
+          limits:
+            cpu: 4000m
+            memory: 16Gi
+            nvidia.com/gpu: 1
+
+      containers:
+      - name: triton-inference-server
+        image: nvcr.io/nvidia/tritonserver:23.10-py3
+        imagePullPolicy: IfNotPresent
+        args:
+        - tritonserver
+        - --model-repository=/models
+        - --strict-model-config=false
+        - --strict-readiness=false
+        - --allow-http=true
+        - --allow-grpc=true
+        - --allow-metrics=true
+        - --allow-gpu-metrics=true
+        - --allow-cpu-metrics=true
+        - --log-verbose=1
+        - --exit-on-error=false
+        - --model-control-mode=poll
+        - --repository-poll-secs=30
+        - --load-model=visual_analysis
+        - --load-model=outfit_recommendation
+        - --load-model=conversational_ai_embedding
+        
+        ports:
+        - containerPort: 8000
+          name: http
+          protocol: TCP
+        - containerPort: 8001
+          name: grpc
+          protocol: TCP
+        - containerPort: 8002
+          name: metrics
+          protocol: TCP
+        
+        env:
+        - name: CUDA_VISIBLE_DEVICES
+          value: "0"
+        - name: NVIDIA_VISIBLE_DEVICES
+          value: "all"
+        - name: NVIDIA_DRIVER_CAPABILITIES
+          value: "compute,utility"
+        
+        volumeMounts:
+        - name: triton-models-storage
+          mountPath: /models
+          readOnly: true
+        - name: triton-cache
+          mountPath: /opt/tritonserver/cache
+        
+        resources:
+          requests:
+            cpu: 2000m
+            memory: 8Gi
+            nvidia.com/gpu: 1
+          limits:
+            cpu: 4000m
+            memory: 16Gi
+            nvidia.com/gpu: 1
+        
+        livenessProbe:
+          httpGet:
+            path: /v2/health/live
+            port: 8000
+          initialDelaySeconds: 60
+          periodSeconds: 30
+          timeoutSeconds: 10
+          failureThreshold: 3
+        
+        readinessProbe:
+          httpGet:
+            path: /v2/health/ready
+            port: 8000
+          initialDelaySeconds: 30
+          periodSeconds: 10
+          timeoutSeconds: 5
+          successThreshold: 1
+          failureThreshold: 3
+        
+        securityContext:
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop:
+            - ALL
+            add:
+            - SYS_ADMIN  # Required for GPU access
+        
+        lifecycle:
+          preStop:
+            exec:
+              command:
+              - /bin/sh
+              - -c
+              - "sleep 15"
+
+      volumes:
+      - name: model-storage
+        persistentVolumeClaim:
+          claimName: model-storage-pvc
+      - name: triton-models-storage
+        persistentVolumeClaim:
+          claimName: triton-models-pvc
+      - name: triton-cache
+        emptyDir:
+          sizeLimit: 5Gi
+
+      imagePullSecrets:
+      - name: aura-ai-registry-secret
+
+      nodeSelector:
+        cloud.google.com/gke-accelerator: nvidia-tesla-t4
+
+      tolerations:
+      - key: nvidia.com/gpu
+        operator: Exists
+        effect: NoSchedule
+
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+          - weight: 100
+            podAffinityTerm:
+              labelSelector:
+                matchExpressions:
+                - key: app
+                  operator: In
+                  values:
+                  - triton-inference-server
+              topologyKey: kubernetes.io/hostname
+
+---
+# Triton Inference Server Service
+apiVersion: v1
+kind: Service
+metadata:
+  name: triton-service
+  namespace: aura-ai
+  labels:
+    app.kubernetes.io/name: triton-inference-server
+    app.kubernetes.io/component: service
+  annotations:
+    prometheus.io/scrape: "true"
+    prometheus.io/port: "8002"
+    prometheus.io/path: "/metrics"
+spec:
+  type: ClusterIP
+  selector:
+    app: triton-inference-server
+  ports:
+  - name: http
+    port: 8000
+    targetPort: 8000
+    protocol: TCP
+  - name: grpc
+    port: 8001
+    targetPort: 8001
+    protocol: TCP
+  - name: metrics
+    port: 8002
+    targetPort: 8002
+    protocol: TCP
+
+---
+# Horizontal Pod Autoscaler for Triton
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: triton-hpa
+  namespace: aura-ai
+  labels:
+    app.kubernetes.io/name: triton-inference-server
+    app.kubernetes.io/component: autoscaler
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: triton-inference-server-deployment
+  minReplicas: 2
+  maxReplicas: 6
+  metrics:
+  - type: Resource
+    resource:
+      name: cpu
+      target:
+        type: Utilization
+        averageUtilization: 70
+  - type: Resource
+    resource:
+      name: memory
+      target:
+        type: Utilization
+        averageUtilization: 75
+  - type: Resource
+    resource:
+      name: nvidia.com/gpu
+      target:
+        type: Utilization
+        averageUtilization: 80
+  behavior:
+    scaleDown:
+      stabilizationWindowSeconds: 300
+      policies:
+      - type: Percent
+        value: 25
+        periodSeconds: 60
+    scaleUp:
+      stabilizationWindowSeconds: 60
+      policies:
+      - type: Percent
+        value: 100
+        periodSeconds: 60
+      - type: Pods
+        value: 2
+        periodSeconds: 60
+      selectPolicy: Max

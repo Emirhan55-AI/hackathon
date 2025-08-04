@@ -1,0 +1,379 @@
+# Conversational AI Service - Kubernetes Deployment and Service
+# Hybrid QLoRA + RAG chatbot for personalized fashion advice
+
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: conversational-ai-deployment
+  namespace: aura-ai
+  labels:
+    app.kubernetes.io/name: conversational-ai
+    app.kubernetes.io/instance: production
+    app.kubernetes.io/version: "1.0.0"
+    app.kubernetes.io/component: microservice
+    app.kubernetes.io/part-of: aura-ai-platform
+    app.kubernetes.io/managed-by: kubernetes
+spec:
+  replicas: 2  # Fewer replicas due to high memory requirements
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0  # Ensure at least one instance is always running
+  selector:
+    matchLabels:
+      app: conversational-ai
+  template:
+    metadata:
+      labels:
+        app: conversational-ai
+        app.kubernetes.io/name: conversational-ai
+        app.kubernetes.io/component: microservice
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "8080"
+        prometheus.io/path: "/metrics"
+    spec:
+      serviceAccountName: aura-ai-service-account
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
+
+      initContainers:
+      # Model and vector store downloader
+      - name: model-downloader
+        image: gcr.io/PROJECT_ID/aura-model-downloader:latest
+        imagePullPolicy: IfNotPresent
+        command:
+        - /bin/sh
+        - -c
+        - |
+          echo "Downloading LLaMA-3-8B and LoRA adapters..."
+          if [ ! -f /models/llama-3-8b-instruct/pytorch_model.bin ]; then
+            echo "Downloading LLaMA-3-8B-Instruct model..."
+            python -c "
+            from transformers import AutoModelForCausalLM, AutoTokenizer
+            import torch
+            
+            model_name = 'meta-llama/Meta-Llama-3-8B-Instruct'
+            model = AutoModelForCausalLM.from_pretrained(
+                model_name,
+                torch_dtype=torch.float16,
+                device_map='auto',
+                use_auth_token=True
+            )
+            tokenizer = AutoTokenizer.from_pretrained(model_name, use_auth_token=True)
+            
+            model.save_pretrained('/models/llama-3-8b-instruct')
+            tokenizer.save_pretrained('/models/llama-3-8b-instruct')
+            "
+          fi
+          
+          if [ ! -f /models/qlora-adapters/adapter_model.bin ]; then
+            echo "Downloading QLoRA adapters..."
+            python -c "
+            from peft import PeftModel
+            import torch
+            
+            # Download fine-tuned LoRA adapters
+            adapter_model = PeftModel.from_pretrained(
+                '/models/llama-3-8b-instruct',
+                'aura-ai/fashion-qlora-adapters',
+                use_auth_token=True
+            )
+            adapter_model.save_pretrained('/models/qlora-adapters')
+            "
+          fi
+          
+          if [ ! -d /vector_store/faiss_index ]; then
+            echo "Downloading vector store and embeddings..."
+            python -c "
+            import os
+            import requests
+            import tarfile
+            
+            # Download pre-built vector store
+            os.makedirs('/vector_store', exist_ok=True)
+            
+            # Download FAISS index
+            response = requests.get('https://storage.googleapis.com/aura-models/fashion-vector-store.tar.gz')
+            with open('/tmp/vector-store.tar.gz', 'wb') as f:
+                f.write(response.content)
+            
+            # Extract vector store
+            with tarfile.open('/tmp/vector-store.tar.gz', 'r:gz') as tar:
+                tar.extractall('/vector_store')
+            
+            print('Vector store downloaded and extracted')
+            "
+          fi
+          echo "Conversational AI model download completed"
+        env:
+        - name: HF_TOKEN
+          valueFrom:
+            secretKeyRef:
+              name: aura-ai-secrets
+              key: HF_TOKEN
+        - name: TRANSFORMERS_CACHE
+          value: "/models"
+        volumeMounts:
+        - name: model-storage
+          mountPath: /models
+        - name: vector-store-storage
+          mountPath: /vector_store
+        resources:
+          requests:
+            cpu: 1000m
+            memory: 4Gi
+          limits:
+            cpu: 2000m
+            memory: 8Gi
+
+      containers:
+      - name: conversational-ai
+        image: gcr.io/PROJECT_ID/aura-conversational-ai:latest
+        imagePullPolicy: IfNotPresent
+        ports:
+        - containerPort: 8003
+          name: http
+          protocol: TCP
+        - containerPort: 8080
+          name: metrics
+          protocol: TCP
+        
+        env:
+        - name: SERVICE_NAME
+          value: "conversational-ai"
+        - name: MODEL_PATH
+          value: "/app/models"
+        - name: VECTOR_STORE_PATH
+          value: "/app/vector_store"
+        - name: DEVICE
+          valueFrom:
+            configMapKeyRef:
+              name: aura-ai-config
+              key: DEVICE
+        - name: LOG_LEVEL
+          valueFrom:
+            configMapKeyRef:
+              name: aura-ai-config
+              key: LOG_LEVEL
+        - name: MAX_WORKERS
+          value: "2"  # Limited workers due to memory requirements
+        - name: HF_TOKEN
+          valueFrom:
+            secretKeyRef:
+              name: aura-ai-secrets
+              key: HF_TOKEN
+        - name: PINECONE_API_KEY
+          valueFrom:
+            secretKeyRef:
+              name: aura-ai-secrets
+              key: PINECONE_API_KEY
+        - name: OPENAI_API_KEY
+          valueFrom:
+            secretKeyRef:
+              name: aura-ai-secrets
+              key: OPENAI_API_KEY
+        - name: POSTGRES_HOST
+          valueFrom:
+            configMapKeyRef:
+              name: aura-ai-config
+              key: POSTGRES_HOST
+        - name: POSTGRES_USER
+          valueFrom:
+            secretKeyRef:
+              name: aura-ai-secrets
+              key: POSTGRES_USER
+        - name: POSTGRES_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: aura-ai-secrets
+              key: POSTGRES_PASSWORD
+        - name: REDIS_HOST
+          valueFrom:
+            configMapKeyRef:
+              name: aura-ai-config
+              key: REDIS_HOST
+        - name: VISUAL_ANALYSIS_URL
+          valueFrom:
+            configMapKeyRef:
+              name: aura-ai-config
+              key: VISUAL_ANALYSIS_URL
+        - name: OUTFIT_RECOMMENDATION_URL
+          valueFrom:
+            configMapKeyRef:
+              name: aura-ai-config
+              key: OUTFIT_RECOMMENDATION_URL
+        
+        volumeMounts:
+        - name: model-storage
+          mountPath: /app/models
+          readOnly: true
+        - name: vector-store-storage
+          mountPath: /app/vector_store
+        - name: logs-storage
+          mountPath: /app/logs
+        
+        resources:
+          requests:
+            cpu: 3000m
+            memory: 16Gi
+            nvidia.com/gpu: 1
+          limits:
+            cpu: 6000m
+            memory: 32Gi
+            nvidia.com/gpu: 1
+        
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 8003
+          initialDelaySeconds: 120  # Longer startup time for LLM
+          periodSeconds: 30
+          timeoutSeconds: 15
+          failureThreshold: 3
+        
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: 8003
+          initialDelaySeconds: 60
+          periodSeconds: 10
+          timeoutSeconds: 10
+          successThreshold: 1
+          failureThreshold: 3
+        
+        securityContext:
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: true
+          capabilities:
+            drop:
+            - ALL
+        
+        lifecycle:
+          preStop:
+            exec:
+              command:
+              - /bin/sh
+              - -c
+              - "sleep 30"  # Longer grace period for LLM shutdown
+
+      volumes:
+      - name: model-storage
+        persistentVolumeClaim:
+          claimName: model-storage-pvc
+      - name: vector-store-storage
+        persistentVolumeClaim:
+          claimName: vector-store-pvc
+      - name: logs-storage
+        persistentVolumeClaim:
+          claimName: logs-pvc
+
+      imagePullSecrets:
+      - name: aura-ai-registry-secret
+
+      nodeSelector:
+        cloud.google.com/gke-accelerator: nvidia-tesla-t4
+
+      tolerations:
+      - key: nvidia.com/gpu
+        operator: Exists
+        effect: NoSchedule
+
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+          - weight: 100
+            podAffinityTerm:
+              labelSelector:
+                matchExpressions:
+                - key: app
+                  operator: In
+                  values:
+                  - conversational-ai
+              topologyKey: kubernetes.io/hostname
+
+---
+# Conversational AI Service
+apiVersion: v1
+kind: Service
+metadata:
+  name: conversational-ai-service
+  namespace: aura-ai
+  labels:
+    app.kubernetes.io/name: conversational-ai
+    app.kubernetes.io/component: service
+  annotations:
+    prometheus.io/scrape: "true"
+    prometheus.io/port: "8080"
+    prometheus.io/path: "/metrics"
+spec:
+  type: ClusterIP
+  selector:
+    app: conversational-ai
+  ports:
+  - name: http
+    port: 8003
+    targetPort: 8003
+    protocol: TCP
+  - name: metrics
+    port: 8080
+    targetPort: 8080
+    protocol: TCP
+
+---
+# Horizontal Pod Autoscaler for Conversational AI
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: conversational-ai-hpa
+  namespace: aura-ai
+  labels:
+    app.kubernetes.io/name: conversational-ai
+    app.kubernetes.io/component: autoscaler
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: conversational-ai-deployment
+  minReplicas: 1
+  maxReplicas: 4  # Limited scaling due to high memory requirements
+  metrics:
+  - type: Resource
+    resource:
+      name: cpu
+      target:
+        type: Utilization
+        averageUtilization: 60  # Lower threshold due to LLM complexity
+  - type: Resource
+    resource:
+      name: memory
+      target:
+        type: Utilization
+        averageUtilization: 70
+  - type: Resource
+    resource:
+      name: nvidia.com/gpu
+      target:
+        type: Utilization
+        averageUtilization: 80
+  behavior:
+    scaleDown:
+      stabilizationWindowSeconds: 600  # Longer stabilization for LLM
+      policies:
+      - type: Percent
+        value: 25
+        periodSeconds: 120
+    scaleUp:
+      stabilizationWindowSeconds: 180
+      policies:
+      - type: Percent
+        value: 100
+        periodSeconds: 120
+      - type: Pods
+        value: 1
+        periodSeconds: 120
+      selectPolicy: Max

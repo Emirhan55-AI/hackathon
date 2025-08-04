@@ -1,0 +1,186 @@
+# DVC (Data Version Control) Configuration for Aura AI Platform
+# This file defines the ML pipeline stages for data processing and model training
+
+stages:
+  # Data preparation stage for Visual Analysis (DETR model)
+  prepare_visual_analysis_data:
+    cmd: python services/visual_analysis/src/data_preparation.py
+    deps:
+    - services/visual_analysis/src/data_preparation.py
+    - data/fashionpedia/
+    params:
+    - visual_analysis.data_preparation.train_split
+    - visual_analysis.data_preparation.val_split
+    - visual_analysis.data_preparation.image_size
+    - visual_analysis.data_preparation.augmentation_config
+    outs:
+    - data/processed/visual_analysis/train/
+    - data/processed/visual_analysis/val/
+    - data/processed/visual_analysis/annotations.json
+
+  # DETR model training stage
+  train_visual_analysis_model:
+    cmd: python services/visual_analysis/src/train_model.py
+    deps:
+    - services/visual_analysis/src/train_model.py
+    - services/visual_analysis/src/models/
+    - data/processed/visual_analysis/
+    params:
+    - visual_analysis.model.backbone
+    - visual_analysis.model.num_classes
+    - visual_analysis.training.epochs
+    - visual_analysis.training.batch_size
+    - visual_analysis.training.learning_rate
+    - visual_analysis.training.weight_decay
+    outs:
+    - models/visual_analysis/detr_fashion_detector.pth
+    - models/visual_analysis/training_metrics.json
+    metrics:
+    - experiments/visual_analysis/metrics.json:
+        cache: false
+
+  # Data preparation for Outfit Recommendation (OutfitTransformer)
+  prepare_outfit_data:
+    cmd: python services/outfit_recommendation/src/data_preparation.py
+    deps:
+    - services/outfit_recommendation/src/data_preparation.py
+    - data/outfit_datasets/
+    - data/fashion_items/
+    params:
+    - outfit_recommendation.data_preparation.min_outfit_size
+    - outfit_recommendation.data_preparation.max_outfit_size
+    - outfit_recommendation.data_preparation.compatibility_threshold
+    - outfit_recommendation.data_preparation.style_categories
+    outs:
+    - data/processed/outfit_recommendation/outfits.json
+    - data/processed/outfit_recommendation/item_embeddings.npy
+    - data/processed/outfit_recommendation/compatibility_matrix.npy
+
+  # OutfitTransformer model training
+  train_outfit_model:
+    cmd: python services/outfit_recommendation/src/train_model.py
+    deps:
+    - services/outfit_recommendation/src/train_model.py
+    - services/outfit_recommendation/src/models/
+    - data/processed/outfit_recommendation/
+    params:
+    - outfit_recommendation.model.hidden_dim
+    - outfit_recommendation.model.num_layers
+    - outfit_recommendation.model.num_heads
+    - outfit_recommendation.model.dropout
+    - outfit_recommendation.training.epochs
+    - outfit_recommendation.training.batch_size
+    - outfit_recommendation.training.learning_rate
+    outs:
+    - models/outfit_recommendation/outfit_transformer.pth
+    - models/outfit_recommendation/item_encoder.pth
+    - models/outfit_recommendation/training_metrics.json
+    metrics:
+    - experiments/outfit_recommendation/metrics.json:
+        cache: false
+
+  # Data preparation for Conversational AI (QLoRA fine-tuning)
+  prepare_conversational_data:
+    cmd: python services/conversational_ai/src/data_preparation.py
+    deps:
+    - services/conversational_ai/src/data_preparation.py
+    - data/conversations/
+    - data/fashion_knowledge/
+    params:
+    - conversational_ai.data_preparation.max_length
+    - conversational_ai.data_preparation.instruction_format
+    - conversational_ai.data_preparation.context_window
+    outs:
+    - data/processed/conversational_ai/training_data.jsonl
+    - data/processed/conversational_ai/validation_data.jsonl
+
+  # QLoRA fine-tuning stage
+  finetune_conversational_model:
+    cmd: python services/conversational_ai/src/finetune.py
+    deps:
+    - services/conversational_ai/src/finetune.py
+    - services/conversational_ai/src/models/
+    - data/processed/conversational_ai/
+    params:
+    - conversational_ai.model.base_model_name
+    - conversational_ai.model.lora_r
+    - conversational_ai.model.lora_alpha
+    - conversational_ai.model.lora_dropout
+    - conversational_ai.training.epochs
+    - conversational_ai.training.batch_size
+    - conversational_ai.training.learning_rate
+    - conversational_ai.training.max_grad_norm
+    outs:
+    - models/conversational_ai/qlora_adapter/
+    - models/conversational_ai/training_metrics.json
+    metrics:
+    - experiments/conversational_ai/metrics.json:
+        cache: false
+
+  # Vector store building for RAG
+  build_vector_store:
+    cmd: python services/conversational_ai/src/build_vector_store.py
+    deps:
+    - services/conversational_ai/src/build_vector_store.py
+    - data/fashion_knowledge/
+    - data/product_catalogs/
+    params:
+    - conversational_ai.vector_store.embedding_model
+    - conversational_ai.vector_store.chunk_size
+    - conversational_ai.vector_store.chunk_overlap
+    - conversational_ai.vector_store.index_type
+    outs:
+    - models/conversational_ai/vector_store/
+    - models/conversational_ai/vector_index.faiss
+
+  # Model evaluation stage
+  evaluate_models:
+    cmd: python scripts/evaluate_models.py
+    deps:
+    - scripts/evaluate_models.py
+    - models/visual_analysis/
+    - models/outfit_recommendation/
+    - models/conversational_ai/
+    - data/test/
+    params:
+    - evaluation.test_batch_size
+    - evaluation.metrics
+    outs:
+    - evaluation/results.json
+    - evaluation/confusion_matrices/
+    metrics:
+    - evaluation/model_performance.json:
+        cache: false
+
+  # Model optimization stage (TensorRT conversion)
+  optimize_models:
+    cmd: python scripts/optimize_models.py
+    deps:
+    - scripts/optimize_models.py
+    - models/visual_analysis/detr_fashion_detector.pth
+    - models/outfit_recommendation/outfit_transformer.pth
+    params:
+    - optimization.precision
+    - optimization.batch_size
+    - optimization.max_workspace_size
+    outs:
+    - models/optimized/visual_analysis_tensorrt.engine
+    - models/optimized/outfit_recommendation_tensorrt.engine
+    - models/optimized/optimization_report.json
+
+# Model registry configuration
+model_registry:
+  visual_analysis:
+    latest: models/visual_analysis/detr_fashion_detector.pth
+    optimized: models/optimized/visual_analysis_tensorrt.engine
+    metrics: experiments/visual_analysis/metrics.json
+    
+  outfit_recommendation:
+    latest: models/outfit_recommendation/outfit_transformer.pth
+    optimized: models/optimized/outfit_recommendation_tensorrt.engine
+    metrics: experiments/outfit_recommendation/metrics.json
+    
+  conversational_ai:
+    adapter: models/conversational_ai/qlora_adapter/
+    vector_store: models/conversational_ai/vector_store/
+    metrics: experiments/conversational_ai/metrics.json

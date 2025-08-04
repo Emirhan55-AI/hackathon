@@ -1,0 +1,103 @@
+# Docker Compose for Aura Conversational AI Service
+# Bu dosya, RAG service'i ve gerekli bağımlılıkları bir arada çalıştırır
+
+services:
+  # Conversational AI Service
+  conversational-ai:
+    build:
+      context: ../../
+      dockerfile: services/conversational_ai/Dockerfile
+    container_name: aura-conversational-ai
+    ports:
+      - "8003:8003"
+    environment:
+      # API Configuration
+      - HOST=0.0.0.0
+      - PORT=8003
+      - DEBUG=false
+      - WORKERS=1
+      
+      # HuggingFace Authentication
+      - HF_TOKEN=${HF_TOKEN:-}
+      - HUGGINGFACE_HUB_TOKEN=${HF_TOKEN:-}
+      
+      # RAG Configuration
+      - RAG_CONFIG=production
+      - FINETUNED_MODEL_PATH=/app/saved_models/aura_fashion_assistant
+      - VECTOR_STORE_PATH=/app/vector_stores/wardrobe_faiss.index
+      
+      # Vector Store Configuration (for Pinecone)
+      - PINECONE_API_KEY=${PINECONE_API_KEY:-}
+      - PINECONE_ENVIRONMENT=us-west1-gcp-free
+      - PINECONE_INDEX_NAME=aura-wardrobe
+      
+    volumes:
+      # Model and data persistence
+      - ./saved_models:/app/saved_models
+      - ./vector_stores:/app/vector_stores
+      - ./data:/app/data
+      - ./logs:/app/logs
+    
+    networks:
+      - aura-network
+    
+    restart: unless-stopped
+    
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8003/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+    
+    # Resource limits
+    deploy:
+      resources:
+        limits:
+          cpus: '2.0'
+          memory: 8G
+        reservations:
+          cpus: '1.0'
+          memory: 4G
+
+  # Redis for caching (optional)
+  redis:
+    image: redis:7-alpine
+    container_name: aura-redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    networks:
+      - aura-network
+    restart: unless-stopped
+    command: redis-server --appendonly yes
+
+  # Nginx reverse proxy (optional)
+  nginx:
+    image: nginx:alpine
+    container_name: aura-nginx
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./ssl:/etc/nginx/ssl:ro
+    networks:
+      - aura-network
+    depends_on:
+      - conversational-ai
+    restart: unless-stopped
+
+# Named volumes
+volumes:
+  redis_data:
+    driver: local
+
+# Network configuration
+networks:
+  aura-network:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.21.0.0/16

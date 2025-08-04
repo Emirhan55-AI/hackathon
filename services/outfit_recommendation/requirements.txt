@@ -1,0 +1,88 @@
+# Core deep learning framework
+torch>=1.9.0
+torchvision>=0.10.0
+torchaudio>=0.9.0
+
+# Hugging Face ecosystem for transformers
+transformers>=4.35.0
+datasets>=2.14.0
+accelerate>=0.24.0
+
+# FastAPI and web services
+fastapi>=0.104.0
+uvicorn>=0.24.0
+python-multipart>=0.0.6
+pydantic>=2.5.0
+pydantic-settings>=2.1.0
+aiofiles>=23.2.0
+
+# Data processing and manipulation
+numpy>=1.24.0
+pandas>=2.1.0
+scikit-learn>=1.3.0
+
+# Image processing for fashion items
+Pillow>=10.0.0
+opencv-python>=4.8.0
+albumentations>=1.3.0
+
+# Graph processing for outfit compatibility
+networkx>=3.2.0
+
+# Recommendation algorithms
+implicit>=0.7.0
+surprise>=1.1.3
+
+# Vector similarity search
+faiss-cpu>=1.7.4
+
+# Database connections
+psycopg2-binary>=2.9.7
+redis>=5.0.1
+
+# HTTP client for external API calls
+httpx>=0.25.2
+
+# Experiment tracking and monitoring
+wandb>=0.16.0
+tensorboard>=2.15.0
+
+# Utility libraries
+typing_extensions>=4.5.0
+tqdm>=4.66.0
+scipy>=1.11.0
+
+# Configuration and serialization
+pyyaml>=6.0.1
+jsonlines>=4.0.0
+python-dotenv>=1.0.0
+
+# Text processing for fashion descriptions
+nltk>=3.8.1
+
+# Visualization for development and debugging
+matplotlib>=3.8.0
+seaborn>=0.13.0
+
+# Performance monitoring
+prometheus-client>=0.19.0
+
+# Logging and error tracking
+structlog>=23.2.0
+sentry-sdk>=1.32.0
+
+# Date and time utilities
+python-dateutil>=2.8.2
+
+# Development and testing
+pytest>=7.4.0
+pytest-asyncio>=0.21.1
+pytest-cov>=4.1.0
+
+# Code quality and formatting
+black>=23.0.0
+flake8>=6.0.0
+mypy>=1.5.0
+
+# Memory profiling for optimization
+memory-profiler>=0.61.0

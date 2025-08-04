@@ -1,0 +1,188 @@
+# Aura AI Platform - Persistent Volume Claims
+# Storage configurations for models, databases, and persistent data
+
+# Storage Class for SSD storage on GKE
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: fast-ssd
+  namespace: aura-ai
+  labels:
+    app.kubernetes.io/name: aura-ai-platform
+    app.kubernetes.io/component: storage-class
+provisioner: kubernetes.io/gce-pd
+parameters:
+  type: pd-ssd
+  replication-type: regional-pd
+  zones: us-central1-a,us-central1-b,us-central1-c
+reclaimPolicy: Retain
+allowVolumeExpansion: true
+volumeBindingMode: WaitForFirstConsumer
+
+---
+# Model Storage PVC - For storing AI models
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: model-storage-pvc
+  namespace: aura-ai
+  labels:
+    app.kubernetes.io/name: aura-ai-platform
+    app.kubernetes.io/component: model-storage
+spec:
+  accessModes:
+    - ReadWriteMany  # Multiple pods can read/write
+  storageClassName: fast-ssd
+  resources:
+    requests:
+      storage: 100Gi  # Large storage for multiple AI models
+  selector:
+    matchLabels:
+      storage-tier: model-storage
+
+---
+# Vector Store PVC - For conversational AI vector embeddings
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: vector-store-pvc
+  namespace: aura-ai
+  labels:
+    app.kubernetes.io/name: aura-ai-platform
+    app.kubernetes.io/component: vector-storage
+spec:
+  accessModes:
+    - ReadWriteOnce  # Single pod access
+  storageClassName: fast-ssd
+  resources:
+    requests:
+      storage: 50Gi  # Vector embeddings and FAISS index
+  selector:
+    matchLabels:
+      storage-tier: vector-storage
+
+---
+# PostgreSQL Database PVC
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: postgres-pvc
+  namespace: aura-ai
+  labels:
+    app.kubernetes.io/name: aura-ai-platform
+    app.kubernetes.io/component: database-storage
+spec:
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: fast-ssd
+  resources:
+    requests:
+      storage: 50Gi  # Database storage
+  selector:
+    matchLabels:
+      storage-tier: database
+
+---
+# Redis Cache PVC
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: redis-pvc
+  namespace: aura-ai
+  labels:
+    app.kubernetes.io/name: aura-ai-platform
+    app.kubernetes.io/component: cache-storage
+spec:
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: fast-ssd
+  resources:
+    requests:
+      storage: 10Gi  # Cache storage
+  selector:
+    matchLabels:
+      storage-tier: cache
+
+---
+# Triton Model Repository PVC
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: triton-models-pvc
+  namespace: aura-ai
+  labels:
+    app.kubernetes.io/name: aura-ai-platform
+    app.kubernetes.io/component: triton-storage
+spec:
+  accessModes:
+    - ReadWriteMany  # Multiple Triton instances can access
+  storageClassName: fast-ssd
+  resources:
+    requests:
+      storage: 75Gi  # Triton optimized models
+  selector:
+    matchLabels:
+      storage-tier: triton-models
+
+---
+# Prometheus Data PVC
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: prometheus-pvc
+  namespace: aura-ai
+  labels:
+    app.kubernetes.io/name: aura-ai-platform
+    app.kubernetes.io/component: monitoring-storage
+spec:
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: fast-ssd
+  resources:
+    requests:
+      storage: 25Gi  # Metrics storage
+  selector:
+    matchLabels:
+      storage-tier: monitoring
+
+---
+# Grafana Data PVC
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: grafana-pvc
+  namespace: aura-ai
+  labels:
+    app.kubernetes.io/name: aura-ai-platform
+    app.kubernetes.io/component: grafana-storage
+spec:
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: fast-ssd
+  resources:
+    requests:
+      storage: 5Gi  # Dashboard storage
+  selector:
+    matchLabels:
+      storage-tier: grafana
+
+---
+# Shared Logs PVC - For centralized logging
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: logs-pvc
+  namespace: aura-ai
+  labels:
+    app.kubernetes.io/name: aura-ai-platform
+    app.kubernetes.io/component: logs-storage
+spec:
+  accessModes:
+    - ReadWriteMany  # Multiple pods can write logs
+  storageClassName: fast-ssd
+  resources:
+    requests:
+      storage: 20Gi  # Log storage
+  selector:
+    matchLabels:
+      storage-tier: logs

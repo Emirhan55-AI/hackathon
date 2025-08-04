@@ -1,0 +1,484 @@
+# Build and Push Docker Images Workflow for Aura AI Platform
+# This workflow builds and pushes Docker images to Google Container Registry
+
+name: Build and Push Docker Images
+
+on:
+  push:
+    branches: [ main ]
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      force_build:
+        description: 'Force rebuild all images'
+        required: false
+        default: false
+        type: boolean
+
+env:
+  REGISTRY: gcr.io
+  PROJECT_ID: ${{ secrets.GCP_PROJECT_ID }}
+  
+jobs:
+  # Setup and authentication
+  setup:
+    name: Setup and Authentication
+    runs-on: ubuntu-latest
+    outputs:
+      image_tag: ${{ steps.meta.outputs.image_tag }}
+      should_deploy: ${{ steps.meta.outputs.should_deploy }}
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      
+    - name: Set up Cloud SDK
+      uses: google-github-actions/setup-gcloud@v1
+      with:
+        service_account_key: ${{ secrets.GCP_SA_KEY }}
+        project_id: ${{ secrets.GCP_PROJECT_ID }}
+        
+    - name: Configure Docker to use gcloud as a credential helper
+      run: |
+        gcloud auth configure-docker
+        
+    - name: Generate image metadata
+      id: meta
+      run: |
+        # Determine image tag based on ref
+        if [[ $GITHUB_REF == refs/tags/* ]]; then
+          IMAGE_TAG=${GITHUB_REF#refs/tags/}
+          SHOULD_DEPLOY="true"
+        elif [[ $GITHUB_REF == refs/heads/main ]]; then
+          IMAGE_TAG="main-${GITHUB_SHA::8}"
+          SHOULD_DEPLOY="true"
+        else
+          IMAGE_TAG="dev-${GITHUB_SHA::8}"
+          SHOULD_DEPLOY="false"
+        fi
+        
+        echo "image_tag=${IMAGE_TAG}" >> $GITHUB_OUTPUT
+        echo "should_deploy=${SHOULD_DEPLOY}" >> $GITHUB_OUTPUT
+        echo "Generated image tag: ${IMAGE_TAG}"
+        echo "Should deploy: ${SHOULD_DEPLOY}"
+
+  # Build Visual Analysis service
+  build-visual-analysis:
+    name: Build Visual Analysis Service
+    runs-on: ubuntu-latest
+    needs: setup
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      
+    - name: Set up Cloud SDK
+      uses: google-github-actions/setup-gcloud@v1
+      with:
+        service_account_key: ${{ secrets.GCP_SA_KEY }}
+        project_id: ${{ secrets.GCP_PROJECT_ID }}
+        
+    - name: Configure Docker to use gcloud as a credential helper
+      run: gcloud auth configure-docker
+      
+    - name: Set up Docker Buildx
+      uses: docker/setup-buildx-action@v3
+      
+    - name: Check for changes in Visual Analysis service
+      id: changes
+      uses: dorny/paths-filter@v2
+      with:
+        filters: |
+          visual_analysis:
+            - 'services/visual_analysis/**'
+            - 'docker-compose.yml'
+            - '.github/workflows/build-and-push.yml'
+            
+    - name: Build and push Visual Analysis image
+      if: steps.changes.outputs.visual_analysis == 'true' || github.event.inputs.force_build == 'true' || github.ref == 'refs/heads/main'
+      uses: docker/build-push-action@v5
+      with:
+        context: ./services/visual_analysis
+        file: ./services/visual_analysis/Dockerfile
+        push: true
+        tags: |
+          ${{ env.REGISTRY }}/${{ env.PROJECT_ID }}/aura-visual-analysis:${{ needs.setup.outputs.image_tag }}
+          ${{ env.REGISTRY }}/${{ env.PROJECT_ID }}/aura-visual-analysis:latest
+        cache-from: type=gha
+        cache-to: type=gha,mode=max
+        platforms: linux/amd64
+        build-args: |
+          BUILDKIT_INLINE_CACHE=1
+          
+    - name: Image security scan
+      if: steps.changes.outputs.visual_analysis == 'true' || github.event.inputs.force_build == 'true'
+      run: |
+        # Pull the image for scanning
+        docker pull ${{ env.REGISTRY }}/${{ env.PROJECT_ID }}/aura-visual-analysis:${{ needs.setup.outputs.image_tag }}
+        
+        # Install and run Trivy
+        curl -sfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh | sh -s -- -b /usr/local/bin
+        trivy image --format table ${{ env.REGISTRY }}/${{ env.PROJECT_ID }}/aura-visual-analysis:${{ needs.setup.outputs.image_tag }}
+
+  # Build Outfit Recommendation service
+  build-outfit-recommendation:
+    name: Build Outfit Recommendation Service
+    runs-on: ubuntu-latest
+    needs: setup
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      
+    - name: Set up Cloud SDK
+      uses: google-github-actions/setup-gcloud@v1
+      with:
+        service_account_key: ${{ secrets.GCP_SA_KEY }}
+        project_id: ${{ secrets.GCP_PROJECT_ID }}
+        
+    - name: Configure Docker to use gcloud as a credential helper
+      run: gcloud auth configure-docker
+      
+    - name: Set up Docker Buildx
+      uses: docker/setup-buildx-action@v3
+      
+    - name: Check for changes in Outfit Recommendation service
+      id: changes
+      uses: dorny/paths-filter@v2
+      with:
+        filters: |
+          outfit_recommendation:
+            - 'services/outfit_recommendation/**'
+            - 'docker-compose.yml'
+            - '.github/workflows/build-and-push.yml'
+            
+    - name: Build and push Outfit Recommendation image
+      if: steps.changes.outputs.outfit_recommendation == 'true' || github.event.inputs.force_build == 'true' || github.ref == 'refs/heads/main'
+      uses: docker/build-push-action@v5
+      with:
+        context: ./services/outfit_recommendation
+        file: ./services/outfit_recommendation/Dockerfile
+        push: true
+        tags: |
+          ${{ env.REGISTRY }}/${{ env.PROJECT_ID }}/aura-outfit-recommendation:${{ needs.setup.outputs.image_tag }}
+          ${{ env.REGISTRY }}/${{ env.PROJECT_ID }}/aura-outfit-recommendation:latest
+        cache-from: type=gha
+        cache-to: type=gha,mode=max
+        platforms: linux/amd64
+        build-args: |
+          BUILDKIT_INLINE_CACHE=1
+          
+    - name: Image security scan
+      if: steps.changes.outputs.outfit_recommendation == 'true' || github.event.inputs.force_build == 'true'
+      run: |
+        docker pull ${{ env.REGISTRY }}/${{ env.PROJECT_ID }}/aura-outfit-recommendation:${{ needs.setup.outputs.image_tag }}
+        curl -sfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh | sh -s -- -b /usr/local/bin
+        trivy image --format table ${{ env.REGISTRY }}/${{ env.PROJECT_ID }}/aura-outfit-recommendation:${{ needs.setup.outputs.image_tag }}
+
+  # Build Conversational AI service
+  build-conversational-ai:
+    name: Build Conversational AI Service
+    runs-on: ubuntu-latest
+    needs: setup
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      
+    - name: Set up Cloud SDK
+      uses: google-github-actions/setup-gcloud@v1
+      with:
+        service_account_key: ${{ secrets.GCP_SA_KEY }}
+        project_id: ${{ secrets.GCP_PROJECT_ID }}
+        
+    - name: Configure Docker to use gcloud as a credential helper
+      run: gcloud auth configure-docker
+      
+    - name: Set up Docker Buildx
+      uses: docker/setup-buildx-action@v3
+      
+    - name: Check for changes in Conversational AI service
+      id: changes
+      uses: dorny/paths-filter@v2
+      with:
+        filters: |
+          conversational_ai:
+            - 'services/conversational_ai/**'
+            - 'docker-compose.yml'
+            - '.github/workflows/build-and-push.yml'
+            
+    - name: Build and push Conversational AI image
+      if: steps.changes.outputs.conversational_ai == 'true' || github.event.inputs.force_build == 'true' || github.ref == 'refs/heads/main'
+      uses: docker/build-push-action@v5
+      with:
+        context: ./services/conversational_ai
+        file: ./services/conversational_ai/Dockerfile
+        push: true
+        tags: |
+          ${{ env.REGISTRY }}/${{ env.PROJECT_ID }}/aura-conversational-ai:${{ needs.setup.outputs.image_tag }}
+          ${{ env.REGISTRY }}/${{ env.PROJECT_ID }}/aura-conversational-ai:latest
+        cache-from: type=gha
+        cache-to: type=gha,mode=max
+        platforms: linux/amd64
+        build-args: |
+          BUILDKIT_INLINE_CACHE=1
+          
+    - name: Image security scan
+      if: steps.changes.outputs.conversational_ai == 'true' || github.event.inputs.force_build == 'true'
+      run: |
+        docker pull ${{ env.REGISTRY }}/${{ env.PROJECT_ID }}/aura-conversational-ai:${{ needs.setup.outputs.image_tag }}
+        curl -sfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh | sh -s -- -b /usr/local/bin
+        trivy image --format table ${{ env.REGISTRY }}/${{ env.PROJECT_ID }}/aura-conversational-ai:${{ needs.setup.outputs.image_tag }}
+
+  # Build Nginx Gateway
+  build-nginx-gateway:
+    name: Build Nginx Gateway
+    runs-on: ubuntu-latest
+    needs: setup
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      
+    - name: Set up Cloud SDK
+      uses: google-github-actions/setup-gcloud@v1
+      with:
+        service_account_key: ${{ secrets.GCP_SA_KEY }}
+        project_id: ${{ secrets.GCP_PROJECT_ID }}
+        
+    - name: Configure Docker to use gcloud as a credential helper
+      run: gcloud auth configure-docker
+      
+    - name: Set up Docker Buildx
+      uses: docker/setup-buildx-action@v3
+      
+    - name: Check for changes in Gateway configuration
+      id: changes
+      uses: dorny/paths-filter@v2
+      with:
+        filters: |
+          gateway:
+            - 'gateway/**'
+            - 'docker-compose.yml'
+            - '.github/workflows/build-and-push.yml'
+            
+    - name: Build and push Nginx Gateway image
+      if: steps.changes.outputs.gateway == 'true' || github.event.inputs.force_build == 'true' || github.ref == 'refs/heads/main'
+      uses: docker/build-push-action@v5
+      with:
+        context: ./gateway
+        file: ./gateway/Dockerfile
+        push: true
+        tags: |
+          ${{ env.REGISTRY }}/${{ env.PROJECT_ID }}/aura-nginx-gateway:${{ needs.setup.outputs.image_tag }}
+          ${{ env.REGISTRY }}/${{ env.PROJECT_ID }}/aura-nginx-gateway:latest
+        cache-from: type=gha
+        cache-to: type=gha,mode=max
+        platforms: linux/amd64
+        build-args: |
+          BUILDKIT_INLINE_CACHE=1
+
+  # Update image tags in Kubernetes manifests
+  update-manifests:
+    name: Update Kubernetes Manifests
+    runs-on: ubuntu-latest
+    needs: [setup, build-visual-analysis, build-outfit-recommendation, build-conversational-ai, build-nginx-gateway]
+    if: needs.setup.outputs.should_deploy == 'true'
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      with:
+        token: ${{ secrets.GITHUB_TOKEN }}
+        
+    - name: Update image tags in Kubernetes manifests
+      run: |
+        IMAGE_TAG="${{ needs.setup.outputs.image_tag }}"
+        
+        # Update Visual Analysis deployment
+        sed -i "s|gcr.io/${{ env.PROJECT_ID }}/aura-visual-analysis:.*|gcr.io/${{ env.PROJECT_ID }}/aura-visual-analysis:${IMAGE_TAG}|g" kubernetes/visual-analysis-deployment.yaml
+        
+        # Update Outfit Recommendation deployment
+        sed -i "s|gcr.io/${{ env.PROJECT_ID }}/aura-outfit-recommendation:.*|gcr.io/${{ env.PROJECT_ID }}/aura-outfit-recommendation:${IMAGE_TAG}|g" kubernetes/outfit-recommendation-deployment.yaml
+        
+        # Update Conversational AI deployment
+        sed -i "s|gcr.io/${{ env.PROJECT_ID }}/aura-conversational-ai:.*|gcr.io/${{ env.PROJECT_ID }}/aura-conversational-ai:${IMAGE_TAG}|g" kubernetes/conversational-ai-deployment.yaml
+        
+        # Update Nginx Gateway deployment
+        sed -i "s|gcr.io/${{ env.PROJECT_ID }}/aura-nginx-gateway:.*|gcr.io/${{ env.PROJECT_ID }}/aura-nginx-gateway:${IMAGE_TAG}|g" kubernetes/nginx-gateway-deployment.yaml
+        
+    - name: Commit and push updated manifests
+      run: |
+        git config --local user.email "action@github.com"
+        git config --local user.name "GitHub Action"
+        
+        if git diff --quiet; then
+          echo "No changes to commit"
+        else
+          git add kubernetes/*-deployment.yaml
+          git commit -m "Update image tags to ${{ needs.setup.outputs.image_tag }}"
+          git push
+        fi
+
+  # Create release artifacts
+  create-release:
+    name: Create Release Artifacts
+    runs-on: ubuntu-latest
+    needs: [setup, build-visual-analysis, build-outfit-recommendation, build-conversational-ai, build-nginx-gateway]
+    if: startsWith(github.ref, 'refs/tags/')
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      
+    - name: Create deployment package
+      run: |
+        mkdir -p release-artifacts
+        
+        # Copy Kubernetes manifests
+        cp -r kubernetes/ release-artifacts/
+        
+        # Copy Docker Compose for local development
+        cp docker-compose.yml release-artifacts/
+        
+        # Create deployment script
+        cat > release-artifacts/deploy-release.sh << 'EOF'
+        #!/bin/bash
+        # Aura AI Platform Release Deployment Script
+        
+        IMAGE_TAG="${1:-${{ needs.setup.outputs.image_tag }}}"
+        
+        echo "Deploying Aura AI Platform with image tag: ${IMAGE_TAG}"
+        
+        # Apply Kubernetes manifests
+        kubectl apply -f kubernetes/
+        
+        echo "Deployment completed!"
+        EOF
+        
+        chmod +x release-artifacts/deploy-release.sh
+        
+        # Create README for release
+        cat > release-artifacts/README.md << 'EOF'
+        # Aura AI Platform Release ${{ needs.setup.outputs.image_tag }}
+        
+        This release contains all necessary files to deploy the Aura AI Platform.
+        
+        ## Included Files:
+        - `kubernetes/`: Kubernetes manifests for GKE deployment
+        - `docker-compose.yml`: Docker Compose for local development
+        - `deploy-release.sh`: Automated deployment script
+        
+        ## Docker Images:
+        - `gcr.io/${{ env.PROJECT_ID }}/aura-visual-analysis:${{ needs.setup.outputs.image_tag }}`
+        - `gcr.io/${{ env.PROJECT_ID }}/aura-outfit-recommendation:${{ needs.setup.outputs.image_tag }}`
+        - `gcr.io/${{ env.PROJECT_ID }}/aura-conversational-ai:${{ needs.setup.outputs.image_tag }}`
+        - `gcr.io/${{ env.PROJECT_ID }}/aura-nginx-gateway:${{ needs.setup.outputs.image_tag }}`
+        
+        ## Deployment:
+        ```bash
+        ./deploy-release.sh
+        ```
+        EOF
+        
+        # Create tar archive
+        cd release-artifacts
+        tar -czf ../aura-ai-platform-${{ needs.setup.outputs.image_tag }}.tar.gz .
+        cd ..
+        
+    - name: Create GitHub Release
+      uses: softprops/action-gh-release@v1
+      with:
+        tag_name: ${{ needs.setup.outputs.image_tag }}
+        name: Aura AI Platform ${{ needs.setup.outputs.image_tag }}
+        body: |
+          ## Aura AI Platform Release ${{ needs.setup.outputs.image_tag }}
+          
+          ### 🚀 New Features & Improvements
+          - Updated Docker images with latest code
+          - Kubernetes manifests updated with new image tags
+          - Security patches and dependency updates
+          
+          ### 📦 Docker Images
+          - Visual Analysis: `gcr.io/${{ env.PROJECT_ID }}/aura-visual-analysis:${{ needs.setup.outputs.image_tag }}`
+          - Outfit Recommendation: `gcr.io/${{ env.PROJECT_ID }}/aura-outfit-recommendation:${{ needs.setup.outputs.image_tag }}`
+          - Conversational AI: `gcr.io/${{ env.PROJECT_ID }}/aura-conversational-ai:${{ needs.setup.outputs.image_tag }}`
+          - Nginx Gateway: `gcr.io/${{ env.PROJECT_ID }}/aura-nginx-gateway:${{ needs.setup.outputs.image_tag }}`
+          
+          ### 🛠️ Deployment
+          Download the release artifacts and run `./deploy-release.sh` to deploy to your Kubernetes cluster.
+          
+          For detailed deployment instructions, see the [Kubernetes README](https://github.com/${{ github.repository }}/blob/main/kubernetes/README.md).
+        files: |
+          aura-ai-platform-${{ needs.setup.outputs.image_tag }}.tar.gz
+        draft: false
+        prerelease: false
+
+  # Cleanup old images
+  cleanup:
+    name: Cleanup Old Images
+    runs-on: ubuntu-latest
+    needs: [setup, build-visual-analysis, build-outfit-recommendation, build-conversational-ai, build-nginx-gateway]
+    if: always()
+    
+    steps:
+    - name: Set up Cloud SDK
+      uses: google-github-actions/setup-gcloud@v1
+      with:
+        service_account_key: ${{ secrets.GCP_SA_KEY }}
+        project_id: ${{ secrets.GCP_PROJECT_ID }}
+        
+    - name: Cleanup old images (keep last 10)
+      run: |
+        SERVICES=("aura-visual-analysis" "aura-outfit-recommendation" "aura-conversational-ai" "aura-nginx-gateway")
+        
+        for SERVICE in "${SERVICES[@]}"; do
+          echo "Cleaning up old images for ${SERVICE}..."
+          
+          # Get all tags except 'latest', sort by creation time, keep last 10
+          gcloud container images list-tags ${{ env.REGISTRY }}/${{ env.PROJECT_ID }}/${SERVICE} \
+            --filter="NOT tags:latest" \
+            --sort-by="~timestamp" \
+            --limit=999 \
+            --format="get(digest)" | tail -n +11 | \
+          while read digest; do
+            if [ ! -z "$digest" ]; then
+              echo "Deleting ${SERVICE}@${digest}"
+              gcloud container images delete ${{ env.REGISTRY }}/${{ env.PROJECT_ID }}/${SERVICE}@${digest} --quiet || true
+            fi
+          done
+        done
+
+  # Final summary
+  build-summary:
+    name: Build Summary
+    runs-on: ubuntu-latest
+    needs: [setup, build-visual-analysis, build-outfit-recommendation, build-conversational-ai, build-nginx-gateway]
+    if: always()
+    
+    steps:
+    - name: Build Summary
+      run: |
+        echo "🏗️ Aura AI Platform Build Summary"
+        echo "================================"
+        echo ""
+        echo "📋 Build Details:"
+        echo "• Image Tag: ${{ needs.setup.outputs.image_tag }}"
+        echo "• Should Deploy: ${{ needs.setup.outputs.should_deploy }}"
+        echo "• Trigger: ${{ github.event_name }}"
+        echo "• Branch/Tag: ${{ github.ref }}"
+        echo ""
+        echo "🐳 Docker Images Built:"
+        echo "• Visual Analysis: gcr.io/${{ env.PROJECT_ID }}/aura-visual-analysis:${{ needs.setup.outputs.image_tag }}"
+        echo "• Outfit Recommendation: gcr.io/${{ env.PROJECT_ID }}/aura-outfit-recommendation:${{ needs.setup.outputs.image_tag }}"
+        echo "• Conversational AI: gcr.io/${{ env.PROJECT_ID }}/aura-conversational-ai:${{ needs.setup.outputs.image_tag }}"
+        echo "• Nginx Gateway: gcr.io/${{ env.PROJECT_ID }}/aura-nginx-gateway:${{ needs.setup.outputs.image_tag }}"
+        echo ""
+        echo "✅ Build completed successfully!"
+        echo ""
+        if [[ "${{ needs.setup.outputs.should_deploy }}" == "true" ]]; then
+          echo "🚀 Images are ready for deployment!"
+        else
+          echo "ℹ️ Images built but deployment skipped (not main branch or tag)"
+        fi

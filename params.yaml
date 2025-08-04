@@ -1,0 +1,185 @@
+# DVC parameters configuration for Aura AI Platform
+# This file contains all hyperparameters and configuration for the ML pipeline
+
+# Visual Analysis Service Parameters
+visual_analysis:
+  data_preparation:
+    train_split: 0.8
+    val_split: 0.2
+    image_size: [800, 800]
+    augmentation_config:
+      horizontal_flip: true
+      rotation_range: 15
+      brightness_range: [0.8, 1.2]
+      contrast_range: [0.8, 1.2]
+      saturation_range: [0.8, 1.2]
+      
+  model:
+    backbone: "resnet50"
+    num_classes: 46  # Fashionpedia categories
+    hidden_dim: 256
+    nheads: 8
+    num_encoder_layers: 6
+    num_decoder_layers: 6
+    
+  training:
+    epochs: 50
+    batch_size: 8
+    learning_rate: 1e-4
+    weight_decay: 1e-4
+    lr_scheduler: "cosine"
+    warmup_epochs: 5
+    clip_max_norm: 0.1
+    
+  evaluation:
+    confidence_threshold: 0.7
+    nms_threshold: 0.5
+    max_detections: 100
+
+# Outfit Recommendation Service Parameters
+outfit_recommendation:
+  data_preparation:
+    min_outfit_size: 2
+    max_outfit_size: 8
+    compatibility_threshold: 0.6
+    style_categories: [
+      "casual", "formal", "business", "party", "sports", 
+      "bohemian", "minimalist", "vintage", "trendy"
+    ]
+    
+  model:
+    hidden_dim: 512
+    num_layers: 6
+    num_heads: 8
+    dropout: 0.1
+    item_embedding_dim: 256
+    style_embedding_dim: 128
+    color_embedding_dim: 64
+    
+  training:
+    epochs: 30
+    batch_size: 32
+    learning_rate: 2e-4
+    weight_decay: 1e-5
+    lr_scheduler: "reduce_on_plateau"
+    patience: 5
+    factor: 0.5
+    
+  evaluation:
+    top_k: 10
+    diversity_weight: 0.2
+    style_consistency_weight: 0.3
+
+# Conversational AI Service Parameters
+conversational_ai:
+  data_preparation:
+    max_length: 2048
+    instruction_format: "alpaca"  # or "chatml", "vicuna"
+    context_window: 4096
+    special_tokens:
+      system: "<|system|>"
+      user: "<|user|>"
+      assistant: "<|assistant|>"
+      
+  model:
+    base_model_name: "meta-llama/Llama-2-7b-chat-hf"
+    model_max_length: 4096
+    
+    # QLoRA configuration
+    lora_r: 64
+    lora_alpha: 16
+    lora_dropout: 0.1
+    lora_target_modules: [
+      "q_proj", "k_proj", "v_proj", "o_proj",
+      "gate_proj", "up_proj", "down_proj"
+    ]
+    
+    # Quantization configuration
+    load_in_4bit: true
+    bnb_4bit_use_double_quant: true
+    bnb_4bit_quant_type: "nf4"
+    bnb_4bit_compute_dtype: "float16"
+    
+  training:
+    epochs: 3
+    batch_size: 1  # Gradient accumulation used
+    gradient_accumulation_steps: 16
+    learning_rate: 2e-4
+    max_grad_norm: 0.3
+    warmup_ratio: 0.03
+    lr_scheduler_type: "cosine"
+    save_steps: 100
+    eval_steps: 50
+    logging_steps: 10
+    
+  vector_store:
+    embedding_model: "sentence-transformers/all-MiniLM-L6-v2"
+    chunk_size: 1000
+    chunk_overlap: 200
+    index_type: "faiss"  # or "pinecone"
+    vector_dim: 384
+    similarity_metric: "cosine"
+
+# Evaluation Parameters
+evaluation:
+  test_batch_size: 16
+  metrics:
+    visual_analysis: ["mAP", "precision", "recall", "f1"]
+    outfit_recommendation: ["ndcg@10", "hit_rate@10", "diversity", "coverage"]
+    conversational_ai: ["bleu", "rouge", "perplexity", "human_eval"]
+    
+  test_split: 0.1
+  cross_validation_folds: 5
+
+# Model Optimization Parameters
+optimization:
+  precision: "fp16"  # fp32, fp16, int8
+  batch_size: 1
+  max_workspace_size: 1000000000  # 1GB
+  calibration_dataset_size: 1000
+  
+  tensorrt:
+    enable: true
+    max_batch_size: 8
+    opt_batch_size: 4
+    dynamic_shapes: true
+    
+  onnx:
+    enable: true
+    opset_version: 11
+    dynamic_axes: true
+
+# Infrastructure Parameters
+infrastructure:
+  gpu:
+    memory_limit: "16Gi"
+    compute_capability: "7.5"  # Tesla T4
+    
+  storage:
+    model_storage: "gcs"  # gcs, s3, local
+    data_storage: "gcs"
+    cache_storage: "local"
+    
+  monitoring:
+    metrics_backend: "prometheus"
+    experiment_tracking: "custom"  # mlflow, wandb, custom
+    
+# Data Sources Configuration
+data_sources:
+  fashionpedia:
+    url: "https://s3.amazonaws.com/datasets.huggingface.co/fashionpedia/fashionpedia.zip"
+    format: "coco"
+    categories_file: "fashionpedia_ontology.json"
+    
+  polyvore:
+    url: "https://github.com/xthan/polyvore-dataset"
+    format: "json"
+    split: "nondisjoint"
+    
+  fashion_knowledge:
+    sources: [
+      "fashion_trends.json",
+      "style_guides.json", 
+      "brand_information.json",
+      "seasonal_recommendations.json"
+    ]
