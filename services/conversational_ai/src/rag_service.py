@@ -48,11 +48,13 @@ from loguru import logger
 try:
     from src.finetune import FineTuningConfig, load_model_and_tokenizer
     from src.build_vector_store import VectorStoreConfig, load_embedding_model, initialize_vector_store
+    from src.secure_token_manager import get_hf_token_manager
 except ImportError:
     # Fallback for development
     try:
         from finetune import FineTuningConfig, load_model_and_tokenizer
         from build_vector_store import VectorStoreConfig, load_embedding_model, initialize_vector_store
+        from secure_token_manager import get_hf_token_manager
     except ImportError:
         # Graceful degradation
         FineTuningConfig = None
@@ -60,6 +62,7 @@ except ImportError:
         VectorStoreConfig = None
         load_embedding_model = None
         initialize_vector_store = None
+        get_hf_token_manager = None
 
 # RAG Configuration
 @dataclass
@@ -176,14 +179,16 @@ class RAGService:
         try:
             logger.info("🔄 Fine-tuned LLM modeli yükleniyor...")
             
-            # Check for HuggingFace authentication
-            hf_token = os.getenv("HF_TOKEN") or os.getenv("HUGGINGFACE_HUB_TOKEN")
-            use_auth_token = hf_token if hf_token and hf_token != "your_huggingface_token_here" else None
-            
-            if use_auth_token:
-                logger.info("🔑 HuggingFace authentication token bulundu")
-            else:
-                logger.warning("⚠️ HuggingFace token bulunamadı - gated modeller için sorun olabilir")
+            # Check for HuggingFace authentication using secure token manager
+            try:
+                token_manager = get_hf_token_manager()
+                hf_token = token_manager.get_token()
+                use_auth_token = hf_token
+                masked_token = token_manager.mask_token(hf_token)
+                logger.info(f"🔑 HuggingFace authentication token bulundu: {masked_token}")
+            except (ValueError, Exception) as e:
+                logger.warning(f"⚠️ HuggingFace token yüklenemedi: {str(e)}")
+                use_auth_token = None
             
             # Quantization config for memory efficiency (only for CUDA)
             if self.config.use_4bit_quantization and self.device.type == "cuda" and torch.cuda.is_available():
