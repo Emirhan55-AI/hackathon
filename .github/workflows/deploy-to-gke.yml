@@ -77,21 +77,18 @@ jobs:
     runs-on: ubuntu-latest
     needs: pre-deployment-checks
     if: needs.pre-deployment-checks.outputs.should_deploy == 'true' && needs.pre-deployment-checks.outputs.environment == 'staging'
-    environment:
-      name: staging
-      url: https://staging.aura-ai.com
     
     steps:
     - name: Checkout code
       uses: actions/checkout@v4
       
     - name: Authenticate to Google Cloud
-      uses: google-github-actions/auth@v1
+      uses: google-github-actions/auth@v2
       with:
         credentials_json: ${{ secrets.GCP_SA_KEY }}
         
     - name: Set up Cloud SDK
-      uses: google-github-actions/setup-gcloud@v1
+      uses: google-github-actions/setup-gcloud@v2
       
     - name: Get GKE credentials
       run: |
@@ -196,21 +193,18 @@ jobs:
     runs-on: ubuntu-latest
     needs: pre-deployment-checks
     if: needs.pre-deployment-checks.outputs.should_deploy == 'true' && needs.pre-deployment-checks.outputs.environment == 'production'
-    environment:
-      name: production
-      url: https://aura-ai.com
     
     steps:
     - name: Checkout code
       uses: actions/checkout@v4
       
     - name: Authenticate to Google Cloud
-      uses: google-github-actions/auth@v1
+      uses: google-github-actions/auth@v2
       with:
         credentials_json: ${{ secrets.GCP_SA_KEY }}
         
     - name: Set up Cloud SDK
-      uses: google-github-actions/setup-gcloud@v1
+      uses: google-github-actions/setup-gcloud@v2
       
     - name: Get GKE credentials
       run: |
@@ -319,20 +313,19 @@ jobs:
     runs-on: ubuntu-latest
     if: failure() && (needs.deploy-staging.result == 'failure' || needs.deploy-production.result == 'failure')
     needs: [pre-deployment-checks, deploy-staging, deploy-production]
-    environment:
-      name: ${{ needs.pre-deployment-checks.outputs.environment }}
+
     
     steps:
     - name: Checkout code
       uses: actions/checkout@v4
       
     - name: Authenticate to Google Cloud
-      uses: google-github-actions/auth@v1
+      uses: google-github-actions/auth@v2
       with:
         credentials_json: ${{ secrets.GCP_SA_KEY }}
         
     - name: Set up Cloud SDK
-      uses: google-github-actions/setup-gcloud@v1
+      uses: google-github-actions/setup-gcloud@v2
       
     - name: Get GKE credentials
       run: |
