@@ -61,18 +61,21 @@ try:
     from src.rag_service import RAGService, RAGConfig, create_rag_service
     from src.rag_config_examples import get_rag_config
     from src.rag_service_manager import create_rag_service_manager, get_rag_service_manager, RAGServiceManager
+    from src.rag_service_resource import RAGServiceResource
 except ImportError as e:
     # Fallback import strategy
     try:
         from rag_service import RAGService, RAGConfig, create_rag_service
         from rag_config_examples import get_rag_config
         from rag_service_manager import create_rag_service_manager, get_rag_service_manager, RAGServiceManager
+        from rag_service_resource import RAGServiceResource
     except ImportError:
         # Development import
         sys.path.insert(0, str(parent_dir.parent))
         from conversational_ai.src.rag_service import RAGService, RAGConfig, create_rag_service
         from conversational_ai.src.rag_config_examples import get_rag_config
         from conversational_ai.src.rag_service_manager import create_rag_service_manager, get_rag_service_manager, RAGServiceManager
+        from conversational_ai.src.rag_service_resource import RAGServiceResource
 
 # Logging configuration
 logging.basicConfig(
@@ -630,13 +633,15 @@ async def chat_endpoint(
                 }
             )
         
-        # 4. RAG pipeline ile yanıt üretme
+        # 4. RAG pipeline ile yanıt üretme (Resource Manager ile)
         logger.info("RAG pipeline başlatılıyor...")
         
-        rag_response = rag_service.generate_response(
-            query=request.query,
-            user_id=request.user_id
-        )
+        # RAGServiceResource context manager ile bellek güvenli kullanım
+        with RAGServiceResource(rag_service) as managed_service:
+            rag_response = managed_service.generate_response(
+                query=request.query,
+                user_id=request.user_id
+            )
         
         # 3. Yanıt işleme
         if not rag_response.get("success", False):

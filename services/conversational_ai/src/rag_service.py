@@ -775,10 +775,69 @@ Aura'nın Yanıtı:"""
             torch.cuda.empty_cache()
         logger.info("🧹 Cache temizlendi")
     
+    def cleanup(self):
+        """
+        RAGService kaynaklarının bellek sızıntısını önlemek için temizleme işlemi
+        Büyük modellerin referanslarını keser ve GPU belleğini boşaltır
+        """
+        try:
+            logger.info(f"🧹 RAGService cleanup başlatılıyor: {id(self)}")
+            
+            # LLM model referansını kes
+            if self.model is not None:
+                logger.info("🤖 LLM model referansı kesiliyor...")
+                del self.model
+                self.model = None
+            
+            # Tokenizer referansını kes
+            if self.tokenizer is not None:
+                logger.info("🔤 Tokenizer referansı kesiliyor...")
+                del self.tokenizer
+                self.tokenizer = None
+            
+            # Embedding model referansını kes
+            if self.embedding_model is not None:
+                logger.info("📊 Embedding model referansı kesiliyor...")
+                del self.embedding_model
+                self.embedding_model = None
+            
+            # Vector store referansını kes
+            if self.vector_store is not None:
+                logger.info("🔍 Vector store referansı kesiliyor...")
+                
+                # Pinecone bağlantısı varsa özel temizleme
+                if self.config.vector_store_type == "pinecone":
+                    try:
+                        # Pinecone client'ı kapatma işlemi (varsa)
+                        if hasattr(self.vector_store, 'close'):
+                            self.vector_store.close()
+                    except Exception as e:
+                        logger.warning(f"⚠️ Pinecone bağlantı kapatma hatası: {str(e)}")
+                
+                del self.vector_store
+                self.vector_store = None
+            
+            # Metadata store referansını kes
+            if self.metadata_store is not None:
+                logger.info("📄 Metadata store referansı kesiliyor...")
+                del self.metadata_store
+                self.metadata_store = None
+            
+            # GPU bellek temizliği
+            self.clear_cache()
+            
+            logger.info("✅ RAGService cleanup tamamlandı")
+            
+        except Exception as e:
+            logger.error(f"❌ RAGService cleanup hatası: {str(e)}")
+            logger.error(f"Traceback: {traceback.format_exc()}")
+    
     def __del__(self):
         """Destructor - cleanup işlemleri"""
         try:
-            self.clear_cache()
+            if hasattr(self, 'model') or hasattr(self, 'tokenizer'):
+                logger.debug(f"🔄 RAGService destructor cleanup: {id(self)}")
+                self.cleanup()
         except:
             pass
 
