@@ -62,6 +62,15 @@ try:
     from src.rag_config_examples import get_rag_config
     from src.rag_service_manager import create_rag_service_manager, get_rag_service_manager, RAGServiceManager
     from src.rag_service_resource import RAGServiceResource
+    from src.logging_config import (
+        setup_logging, 
+        StructuredLoggingMiddleware,
+        get_structured_logger,
+        log_service_event,
+        log_performance_metric,
+        log_error_with_context,
+        api_logger
+    )
 except ImportError as e:
     # Fallback import strategy
     try:
@@ -69,6 +78,15 @@ except ImportError as e:
         from rag_config_examples import get_rag_config
         from rag_service_manager import create_rag_service_manager, get_rag_service_manager, RAGServiceManager
         from rag_service_resource import RAGServiceResource
+        from logging_config import (
+            setup_logging, 
+            StructuredLoggingMiddleware,
+            get_structured_logger,
+            log_service_event,
+            log_performance_metric,
+            log_error_with_context,
+            api_logger
+        )
     except ImportError:
         # Development import
         sys.path.insert(0, str(parent_dir.parent))
@@ -76,17 +94,19 @@ except ImportError as e:
         from conversational_ai.src.rag_config_examples import get_rag_config
         from conversational_ai.src.rag_service_manager import create_rag_service_manager, get_rag_service_manager, RAGServiceManager
         from conversational_ai.src.rag_service_resource import RAGServiceResource
+        from conversational_ai.src.logging_config import (
+            setup_logging, 
+            StructuredLoggingMiddleware,
+            get_structured_logger,
+            log_service_event,
+            log_performance_metric,
+            log_error_with_context,
+            api_logger
+        )
 
-# Logging configuration
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    handlers=[
-        logging.StreamHandler(),
-        logging.FileHandler('conversational_ai_api.log')
-    ]
-)
-logger = logging.getLogger(__name__)
+# Structured logging configuration
+setup_logging()
+logger = get_structured_logger("api", service="conversational_ai")
 
 # Global RAG service manager
 rag_service_manager: Optional[RAGServiceManager] = None
@@ -209,35 +229,8 @@ class ErrorResponse(BaseModel):
     timestamp: str = Field(description="Hata zamanı")
 
 
-# Custom middleware for logging and monitoring
-class LoggingMiddleware(BaseHTTPMiddleware):
-    """HTTP isteklerini loglayan middleware"""
-    
-    async def dispatch(self, request: Request, call_next):
-        start_time = time.time()
-        request_id = f"req_{int(time.time() * 1000)}"
-        
-        # Request logging
-        logger.info(f"[{request_id}] Request: {request.method} {request.url}")
-        
-        try:
-            response = await call_next(request)
-            process_time = time.time() - start_time
-            
-            # Response logging
-            logger.info(
-                f"[{request_id}] Response: {response.status_code} | "
-                f"Time: {process_time:.4f}s"
-            )
-            
-            response.headers["X-Request-ID"] = request_id
-            response.headers["X-Process-Time"] = str(process_time)
-            return response
-            
-        except Exception as e:
-            process_time = time.time() - start_time
-            logger.error(f"[{request_id}] Request failed: {str(e)} | Time: {process_time:.4f}s")
-            raise
+# Structured logging middleware has been moved to logging_config.py
+# Using StructuredLoggingMiddleware instead of custom LoggingMiddleware
 
 
 # A2. FastAPI Uygulaması ve RAG Servisinin Yüklenmesi
@@ -249,7 +242,7 @@ async def lifespan(app: FastAPI):
     """
     global rag_service_manager
     
-    logger.info("🚀 Aura Conversational AI API başlatılıyor...")
+    log_service_event(logger, "application_startup", service="conversational_ai", version=API_VERSION)
     
     # Startup: RAG Service Manager oluşturma
     try:
@@ -277,28 +270,40 @@ async def lifespan(app: FastAPI):
         # RAG Service Manager oluştur (henüz başlatma)
         rag_service_manager = create_rag_service_manager(config)
         
-        logger.info("✅ RAG Service Manager oluşturuldu!")
-        logger.info("ℹ️ RAG Service lazy loading ile ilk istekte başlatılacak")
+        log_service_event(logger, "rag_service_manager_created", status="success")
+        log_service_event(logger, "lazy_loading_configured", message="RAG Service will be initialized on first request")
         
     except Exception as e:
-        logger.error(f"❌ RAG Service Manager oluşturma hatası: {str(e)}")
-        logger.error(f"Traceback: {traceback.format_exc()}")
+        log_error_with_context(
+            logger, 
+            e, 
+            {
+                "operation": "rag_service_manager_creation",
+                "config_name": config_name,
+                "model_path": model_path,
+                "vector_store_path": vector_store_path
+            }
+        )
         rag_service_manager = None
     
     yield  # Uygulama çalışırken bekle
     
     # Shutdown: Temizleme işlemleri
-    logger.info("🛑 Aura Conversational AI API kapatılıyor...")
+    log_service_event(logger, "application_shutdown_started")
     
     try:
         if rag_service_manager is not None:
             await rag_service_manager.shutdown()
             rag_service_manager = None
             
-        logger.info("✅ Temizleme işlemleri tamamlandı")
+        log_service_event(logger, "application_shutdown_completed", status="success")
         
     except Exception as e:
-        logger.error(f"❌ Temizleme hatası: {str(e)}")
+        log_error_with_context(
+            logger, 
+            e, 
+            {"operation": "application_shutdown"}
+        )
 
 
 # FastAPI uygulaması oluşturma
@@ -329,7 +334,7 @@ app.add_middleware(
 )
 
 # Custom logging middleware
-app.add_middleware(LoggingMiddleware)
+app.add_middleware(StructuredLoggingMiddleware)
 
 
 # A4. Global hata işleyicileri
@@ -590,7 +595,13 @@ async def chat_endpoint(
     """
     start_time = time.time()
     
-    logger.info(f"Chat request: user={request.user_id}, query='{request.query[:50]}...'")
+    request_logger = logger.bind(
+        user_id=request.user_id,
+        query_preview=request.query[:50] + "..." if len(request.query) > 50 else request.query,
+        session_id=request.session_id
+    )
+    
+    request_logger.info("chat_request_received")
     
     try:
         # 1. RAG service manager kontrolü
@@ -612,10 +623,16 @@ async def chat_endpoint(
         try:
             rag_service = rag_service_manager.get_service()
         except RuntimeError as e:
-            logger.error(f"❌ RAG Service alma hatası: {str(e)}")
+            log_error_with_context(
+                request_logger,
+                e,
+                {"operation": "get_rag_service", "fallback": "true"}
+            )
             # Fallback response
             fallback_response = generate_fallback_response(request.query, request.user_id)
             processing_time = time.time() - start_time
+            
+            log_performance_metric(request_logger, "chat_response_time", processing_time * 1000, "ms", mode="fallback")
             
             return ChatResponse(
                 success=True,
@@ -634,7 +651,7 @@ async def chat_endpoint(
             )
         
         # 4. RAG pipeline ile yanıt üretme (Resource Manager ile)
-        logger.info("RAG pipeline başlatılıyor...")
+        request_logger.info("rag_pipeline_started")
         
         # RAGServiceResource context manager ile bellek güvenli kullanım
         with RAGServiceResource(rag_service) as managed_service:
@@ -678,7 +695,10 @@ async def chat_endpoint(
             }
         )
         
-        logger.info(f"Chat response generated: {processing_time:.3f}s, confidence={confidence:.2f}")
+        log_performance_metric(request_logger, "chat_response_time", processing_time * 1000, "ms", 
+                             confidence=confidence, mode="rag_pipeline")
+        request_logger.info("chat_response_generated", confidence=confidence, 
+                           context_items=len(rag_response.get("context_used", [])))
         return response
         
     except HTTPException:
@@ -688,8 +708,15 @@ async def chat_endpoint(
     except Exception as e:
         # Beklenmeyen hatalar
         processing_time = time.time() - start_time
-        logger.error(f"Chat error: {str(e)} | Time: {processing_time:.4f}s")
-        logger.error(f"Traceback: {traceback.format_exc()}")
+        log_error_with_context(
+            request_logger,
+            e,
+            {
+                "operation": "chat_processing",
+                "processing_time": processing_time,
+                "query_length": len(request.query)
+            }
+        )
         
         raise HTTPException(
             status_code=500,

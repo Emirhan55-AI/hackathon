@@ -42,7 +42,22 @@ except ImportError:
     pinecone = None
 
 # Logging setup
-from loguru import logger
+try:
+    from src.logging_config import (
+        get_structured_logger, 
+        log_service_event, 
+        log_performance_metric,
+        log_ml_inference,
+        log_error_with_context,
+        rag_logger
+    )
+    logger = get_structured_logger("rag_service", service="conversational_ai")
+    STRUCTURED_LOGGING = True
+except ImportError:
+    # Fallback to basic logging if structured logging not available
+    import logging
+    logger = logging.getLogger(__name__)
+    STRUCTURED_LOGGING = False
 
 # Local imports
 try:
@@ -147,13 +162,26 @@ class RAGService:
             import os
             os.environ["CUDA_VISIBLE_DEVICES"] = ""
             self.device = torch.device("cpu")
-            logger.info("🖥️ CUDA devre dışı - CPU modunda çalışılıyor")
+            if STRUCTURED_LOGGING:
+                log_service_event(logger, "cuda_disabled", device="cpu", reason="cuda_unavailable")
+            else:
+                logger.info("🖥️ CUDA devre dışı - CPU modunda çalışılıyor")
         
-        logger.info("🚀 RAG Service başlatılıyor...")
-        logger.info(f"📱 Device: {self.device}")
-        logger.info(f"🧠 Base Model: {config.base_model_name}")
-        logger.info(f"🎯 Fine-tuned Model: {config.finetuned_model_path}")
-        logger.info(f"🔍 Vector Store: {config.vector_store_type}")
+        if STRUCTURED_LOGGING:
+            log_service_event(
+                logger, 
+                "rag_service_initialization_started",
+                device=str(self.device),
+                base_model=config.base_model_name,
+                finetuned_model=config.finetuned_model_path,
+                vector_store_type=config.vector_store_type
+            )
+        else:
+            logger.info("🚀 RAG Service başlatılıyor...")
+            logger.info(f"📱 Device: {self.device}")
+            logger.info(f"🧠 Base Model: {config.base_model_name}")
+            logger.info(f"🎯 Fine-tuned Model: {config.finetuned_model_path}")
+            logger.info(f"🔍 Vector Store: {config.vector_store_type}")
         
         # Initialize components
         self.tokenizer = None
@@ -170,7 +198,10 @@ class RAGService:
         # Setup prompt templates
         self._setup_prompt_templates()
         
-        logger.info("✅ RAG Service başarıyla başlatıldı!")
+        if STRUCTURED_LOGGING:
+            log_service_event(logger, "rag_service_initialization_completed", status="success")
+        else:
+            logger.info("✅ RAG Service başarıyla başlatıldı!")
     
     def _load_llm_model(self):
         """
@@ -260,11 +291,26 @@ class RAGService:
             # Set model to evaluation mode
             self.model.eval()
             
-            logger.info("✅ LLM modeli başarıyla yüklendi!")
+            if STRUCTURED_LOGGING:
+                log_service_event(logger, "llm_model_loaded", status="success", model_path=self.config.base_model_name)
+            else:
+                logger.info("✅ LLM modeli başarıyla yüklendi!")
             
         except Exception as e:
-            logger.error(f"❌ LLM model yükleme hatası: {str(e)}")
-            logger.error(f"Traceback: {traceback.format_exc()}")
+            if STRUCTURED_LOGGING:
+                log_error_with_context(
+                    logger, 
+                    e,
+                    {
+                        "operation": "llm_model_loading",
+                        "base_model": self.config.base_model_name,
+                        "finetuned_model": self.config.finetuned_model_path,
+                        "device": str(self.device)
+                    }
+                )
+            else:
+                logger.error(f"❌ LLM model yükleme hatası: {str(e)}")
+                logger.error(f"Traceback: {traceback.format_exc()}")
             raise
     
     def _load_embedding_model(self):
