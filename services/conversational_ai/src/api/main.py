@@ -60,16 +60,19 @@ sys.path.insert(0, str(parent_dir))
 try:
     from src.rag_service import RAGService, RAGConfig, create_rag_service
     from src.rag_config_examples import get_rag_config
+    from src.rag_service_manager import create_rag_service_manager, get_rag_service_manager, RAGServiceManager
 except ImportError as e:
     # Fallback import strategy
     try:
         from rag_service import RAGService, RAGConfig, create_rag_service
         from rag_config_examples import get_rag_config
+        from rag_service_manager import create_rag_service_manager, get_rag_service_manager, RAGServiceManager
     except ImportError:
         # Development import
         sys.path.insert(0, str(parent_dir.parent))
         from conversational_ai.src.rag_service import RAGService, RAGConfig, create_rag_service
         from conversational_ai.src.rag_config_examples import get_rag_config
+        from conversational_ai.src.rag_service_manager import create_rag_service_manager, get_rag_service_manager, RAGServiceManager
 
 # Logging configuration
 logging.basicConfig(
@@ -82,8 +85,8 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# Global RAG service instance
-global_rag_service: Optional[RAGService] = None
+# Global RAG service manager
+rag_service_manager: Optional[RAGServiceManager] = None
 
 # API Configuration
 API_TITLE = "Aura Conversational AI API"
@@ -239,20 +242,20 @@ class LoggingMiddleware(BaseHTTPMiddleware):
 async def lifespan(app: FastAPI):
     """
     A2. Uygulama yaşam döngüsü yönetimi
-    Başlangıçta RAG servis yükleme, kapanışta temizleme işlemleri
+    RAG Service Manager oluşturma ve temizleme işlemleri
     """
-    global global_rag_service
+    global rag_service_manager
     
     logger.info("🚀 Aura Conversational AI API başlatılıyor...")
     
-    # Startup: RAG Service yükleme
+    # Startup: RAG Service Manager oluşturma
     try:
         # Environment variables'dan config ayarları
         config_name = os.getenv("RAG_CONFIG", "basic")  # basic, production, fast_inference vb.
         model_path = os.getenv("FINETUNED_MODEL_PATH", "./saved_models/aura_fashion_assistant")
         vector_store_path = os.getenv("VECTOR_STORE_PATH", "./vector_stores/wardrobe_faiss.index")
         
-        logger.info(f"RAG Service yükleniyor: config={config_name}")
+        logger.info(f"RAG Service Manager oluşturuluyor: config={config_name}")
         logger.info(f"Model path: {model_path}")
         logger.info(f"Vector store path: {vector_store_path}")
         
@@ -268,20 +271,16 @@ async def lifespan(app: FastAPI):
             config.finetuned_model_path = model_path
             config.vector_store_path = vector_store_path
         
-        # RAG Service oluştur
-        global_rag_service = RAGService(config)
+        # RAG Service Manager oluştur (henüz başlatma)
+        rag_service_manager = create_rag_service_manager(config)
         
-        logger.info("✅ RAG Service başarıyla yüklendi!")
-        
-        # Service stats
-        stats = global_rag_service.get_service_stats()
-        logger.info(f"📊 RAG Service İstatistikleri: {stats}")
+        logger.info("✅ RAG Service Manager oluşturuldu!")
+        logger.info("ℹ️ RAG Service lazy loading ile ilk istekte başlatılacak")
         
     except Exception as e:
-        logger.error(f"❌ RAG Service yükleme hatası: {str(e)}")
+        logger.error(f"❌ RAG Service Manager oluşturma hatası: {str(e)}")
         logger.error(f"Traceback: {traceback.format_exc()}")
-        # Uygulamayı durdurmayalım, hata endpoint'lerinde ele alalım
-        global_rag_service = None
+        rag_service_manager = None
     
     yield  # Uygulama çalışırken bekle
     
@@ -289,11 +288,9 @@ async def lifespan(app: FastAPI):
     logger.info("🛑 Aura Conversational AI API kapatılıyor...")
     
     try:
-        if global_rag_service is not None:
-            # RAG Service cleanup
-            global_rag_service.clear_cache()
-            del global_rag_service
-            global_rag_service = None
+        if rag_service_manager is not None:
+            await rag_service_manager.shutdown()
+            rag_service_manager = None
             
         logger.info("✅ Temizleme işlemleri tamamlandı")
         
@@ -540,16 +537,22 @@ async def health_check():
     """
     logger.debug("Health check isteği alındı")
     
-    service_loaded = global_rag_service is not None
-    status = "OK" if service_loaded else "RAG_SERVICE_NOT_LOADED"
+    global rag_service_manager
+    
+    service_loaded = rag_service_manager is not None and rag_service_manager.is_ready()
+    status = "OK" if service_loaded else "RAG_SERVICE_NOT_READY"
     
     # RAG service stats
     rag_stats = {}
-    if global_rag_service:
+    if rag_service_manager and rag_service_manager.is_ready():
         try:
-            rag_stats = global_rag_service.get_service_stats()
+            rag_service = rag_service_manager.get_service()
+            rag_stats = rag_service.get_service_stats()
         except Exception as e:
             rag_stats = {"error": str(e)}
+    elif rag_service_manager:
+        # Manager var ama service hazır değil
+        rag_stats = rag_service_manager.get_status()
     
     return HealthResponse(
         status=status,
@@ -587,11 +590,27 @@ async def chat_endpoint(
     logger.info(f"Chat request: user={request.user_id}, query='{request.query[:50]}...'")
     
     try:
-        # 1. RAG service kontrolü
-        if global_rag_service is None:
-            # Fallback response - RAG service yüklenemediğinde
-            logger.warning("RAG Service yüklü değil, fallback response döndürülüyor")
-            
+        # 1. RAG service manager kontrolü
+        global rag_service_manager
+        
+        if rag_service_manager is None:
+            raise HTTPException(status_code=503, detail="RAG Service Manager başlatılamadı.")
+        
+        # 2. Servis hazır değilse başlatmaya çalış
+        if not rag_service_manager.is_ready():
+            try:
+                logger.info("🔄 RAG Service başlatılıyor...")
+                await rag_service_manager.initialize()
+            except Exception as e:
+                logger.error(f"❌ RAG Service başlatma hatası: {str(e)}")
+                raise HTTPException(status_code=503, detail="RAG Service başlatılamadı.")
+        
+        # 3. RAG service'i al
+        try:
+            rag_service = rag_service_manager.get_service()
+        except RuntimeError as e:
+            logger.error(f"❌ RAG Service alma hatası: {str(e)}")
+            # Fallback response
             fallback_response = generate_fallback_response(request.query, request.user_id)
             processing_time = time.time() - start_time
             
@@ -611,10 +630,10 @@ async def chat_endpoint(
                 }
             )
         
-        # 2. RAG pipeline ile yanıt üretme
+        # 4. RAG pipeline ile yanıt üretme
         logger.info("RAG pipeline başlatılıyor...")
         
-        rag_response = global_rag_service.generate_response(
+        rag_response = rag_service.generate_response(
             query=request.query,
             user_id=request.user_id
         )
@@ -695,20 +714,30 @@ async def batch_chat_endpoint(
     logger.info(f"Batch chat request: {len(request.messages)} messages")
     
     try:
-        # RAG service kontrolü ve fallback
-        if global_rag_service is None:
-            logger.warning("RAG Service yüklü değil, batch fallback response döndürülüyor")
-            # Batch fallback responses
-            responses = []
-            for message in request.messages:
-                fallback_resp = generate_fallback_response(message.query, message.user_id)
-                responses.append(ChatResponse(
-                    success=True,
-                    response=fallback_resp,
-                    user_id=message.user_id,
-                    session_id=message.session_id,
-                    context_used=[],
-                    confidence=0.5,
+        # RAG service manager kontrolü ve fallback
+        global rag_service_manager
+        
+        if rag_service_manager is None:
+            raise HTTPException(status_code=503, detail="RAG Service Manager başlatılamadı.")
+        
+        # Servis hazır değilse başlatmaya çalış
+        if not rag_service_manager.is_ready():
+            try:
+                logger.info("🔄 RAG Service batch işlem için başlatılıyor...")
+                await rag_service_manager.initialize()
+            except Exception as e:
+                logger.error(f"❌ RAG Service başlatma hatası: {str(e)}")
+                # Batch fallback responses
+                responses = []
+                for message in request.messages:
+                    fallback_resp = generate_fallback_response(message.query, message.user_id)
+                    responses.append(ChatResponse(
+                        success=True,
+                        response=fallback_resp,
+                        user_id=message.user_id,
+                        session_id=message.session_id,
+                        context_used=[],
+                        confidence=0.5,
                     suggestions=["Ne tür kıyafetler tercih ediyorsun?"],
                     metadata={"mode": "fallback", "model_used": "fallback_chatbot"}
                 ))
@@ -781,20 +810,24 @@ async def batch_chat_endpoint(
 @app.get("/chat/stats", response_model=Dict[str, Any])
 async def get_chat_stats():
     """RAG service ve chat istatistiklerini döndürür"""
-    if global_rag_service is None:
+    global rag_service_manager
+    
+    if rag_service_manager is None or not rag_service_manager.is_ready():
         # Fallback stats
+        status = "not_initialized" if rag_service_manager is None else "initializing"
         return {
             "api_version": API_VERSION,
-            "service_status": "fallback_mode",
+            "service_status": status,
             "rag_service_loaded": False,
             "mode": "fallback_chatbot",
             "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
             "endpoints": ["/chat", "/chat/batch", "/health", "/stats"],
-            "message": "RAG service yüklenmedi, fallback modunda çalışıyor"
+            "message": f"RAG service {status}, fallback modunda çalışıyor"
         }
     
     try:
-        rag_stats = global_rag_service.get_service_stats()
+        rag_service = rag_service_manager.get_service()
+        rag_stats = rag_service.get_service_stats()
         
         api_stats = {
             "api_version": API_VERSION,
