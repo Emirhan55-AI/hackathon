@@ -86,13 +86,13 @@ class RAGConfig:
     
     # Model paths
     base_model_name: str = "meta-llama/Meta-Llama-3-8B-Instruct"
-    finetuned_model_path: str = "./saved_models/aura_fashion_assistant"
+    finetuned_model_path: str = "/app/models/aura_fashion_assistant"
     embedding_model_name: str = "sentence-transformers/all-MiniLM-L6-v2"
     
     # Vector store configuration
     vector_store_type: str = "faiss"  # "faiss" or "pinecone"
-    vector_store_path: str = "./vector_stores/wardrobe_faiss.index"
-    metadata_path: str = "./vector_stores/wardrobe_metadata.json"
+    vector_store_path: str = "/app/vector_store/wardrobe_faiss.index"
+    metadata_path: str = "/app/vector_store/wardrobe_metadata.json"
     
     # Pinecone configuration (if used)
     pinecone_api_key: Optional[str] = None

@@ -248,8 +248,8 @@ async def lifespan(app: FastAPI):
     try:
         # Environment variables'dan config ayarları
         config_name = os.getenv("RAG_CONFIG", "basic")  # basic, production, fast_inference vb.
-        model_path = os.getenv("FINETUNED_MODEL_PATH", "./saved_models/aura_fashion_assistant")
-        vector_store_path = os.getenv("VECTOR_STORE_PATH", "./vector_stores/wardrobe_faiss.index")
+        model_path = os.getenv("FINETUNED_MODEL_PATH", "/app/models/aura_fashion_assistant")
+        vector_store_path = os.getenv("VECTOR_STORE_PATH", "/app/vector_store/wardrobe_faiss.index")
         
         logger.info(f"RAG Service Manager oluşturuluyor: config={config_name}")
         logger.info(f"Model path: {model_path}")

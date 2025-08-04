@@ -50,6 +50,10 @@ ENV/
 env.bak/
 venv.bak/
 
+# Persistent data directories (large AI models and databases)
+data/
+!data/.gitkeep
+
 # Jupyter Notebook
 .ipynb_checkpoints
 

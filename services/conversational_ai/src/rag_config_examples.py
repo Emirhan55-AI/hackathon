@@ -24,13 +24,13 @@ def basic_rag_config() -> Union["RAGConfig", None]:
     return RAGConfig(
         # Model paths
         base_model_name="meta-llama/Meta-Llama-3-8B-Instruct",
-        finetuned_model_path="./saved_models/aura_fashion_assistant",
+        finetuned_model_path="/app/models/aura_fashion_assistant",
         embedding_model_name="sentence-transformers/all-MiniLM-L6-v2",
         
         # Vector store
         vector_store_type="faiss",
-        vector_store_path="./vector_stores/wardrobe_faiss.index",
-        metadata_path="./vector_stores/wardrobe_metadata.json",
+        vector_store_path="/app/vector_store/wardrobe_faiss.index",
+        metadata_path="/app/vector_store/wardrobe_metadata.json",
         
         # Retrieval params
         top_k_retrieval=5,
@@ -55,7 +55,7 @@ def production_rag_config() -> Union["RAGConfig", None]:
     return RAGConfig(
         # Model paths
         base_model_name="meta-llama/Meta-Llama-3-8B-Instruct",
-        finetuned_model_path="./saved_models/aura_fashion_assistant_v2",
+        finetuned_model_path="/app/models/aura_fashion_assistant_v2",
         embedding_model_name="sentence-transformers/all-mpnet-base-v2",  # Daha iyi embedding
         
         # Vector store
@@ -88,13 +88,13 @@ def memory_optimized_rag_config() -> Union["RAGConfig", None]:
     return RAGConfig(
         # Model paths
         base_model_name="microsoft/DialoGPT-medium",  # Daha küçük model
-        finetuned_model_path="./saved_models/aura_fashion_assistant_light",
+        finetuned_model_path="/app/models/aura_fashion_assistant_light",
         embedding_model_name="sentence-transformers/all-MiniLM-L6-v2",
         
         # Vector store
         vector_store_type="faiss",
-        vector_store_path="./vector_stores/wardrobe_faiss.index",
-        metadata_path="./vector_stores/wardrobe_metadata.json",
+        vector_store_path="/app/vector_store/wardrobe_faiss.index",
+        metadata_path="/app/vector_store/wardrobe_metadata.json",
         
         # Retrieval params
         top_k_retrieval=3,  # Daha az context
@@ -120,13 +120,13 @@ def fast_inference_rag_config() -> Union["RAGConfig", None]:
     return RAGConfig(
         # Model paths
         base_model_name="microsoft/DialoGPT-small",  # En küçük model
-        finetuned_model_path="./saved_models/aura_fashion_assistant_fast",
+        finetuned_model_path="/app/models/aura_fashion_assistant_fast",
         embedding_model_name="sentence-transformers/all-MiniLM-L6-v2",
         
         # Vector store
         vector_store_type="faiss",
-        vector_store_path="./vector_stores/wardrobe_faiss.index",
-        metadata_path="./vector_stores/wardrobe_metadata.json",
+        vector_store_path="/app/vector_store/wardrobe_faiss.index",
+        metadata_path="/app/vector_store/wardrobe_metadata.json",
         
         # Retrieval params
         top_k_retrieval=3,
